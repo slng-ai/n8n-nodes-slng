@@ -67,6 +67,36 @@ cd ~/.n8n/nodes
 npm install n8n-nodes-slng@0.1.0 --registry <private-registry-url>
 ```
 
+### Automated release from main
+
+This repository publishes automatically when changes land on `main`.
+
+The release workflow:
+
+1. Installs dependencies with `npm ci`
+2. Builds and lints the node package
+3. Uses Conventional Commit messages to choose the next version
+4. Updates `CHANGELOG.md`, `package.json`, and `package-lock.json`
+5. Publishes the package to npmjs.com
+6. Creates a GitHub Release with the generated `.tgz` tarball attached
+
+Versioning follows the same style as `gateway-specs`:
+
+- `feat:` creates a minor release
+- `fix:`, `perf:`, `refactor:`, `docs:`, `chore:`, `ci:`, `test:`, `style:`, and `build:` create patch releases
+- `BREAKING CHANGE:` in the commit body, or `!` in the commit header, creates a major release
+
+The workflow bootstraps the current version on its first run by creating `v0.1.0` from the initial commit if that tag does not already exist. If you want to do this manually before merging the release workflow, create the tag from the commit that contains `package.json` version `0.1.0`:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+After that, each squash-merged PR to `main` should use a Conventional Commit title, for example `feat: add SLNG trigger options` or `fix: normalize trigger arguments`.
+
+For npmjs.com, prefer [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/) with GitHub Actions OIDC. Configure npm with this repository and `.github/workflows/publish.yml`. If Trusted Publishing is not configured, set an `NPM_TOKEN` repository secret with publish access.
+
 ### Bake into an n8n Docker image
 
 For production, prefer a custom n8n image with the package installed at build time:
