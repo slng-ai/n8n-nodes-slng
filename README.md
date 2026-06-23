@@ -7,6 +7,7 @@ SLNG is a unified voice AI platform offering text-to-speech, speech-to-text, and
 [n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/sustainable-use-license/) workflow automation platform.
 
 [Installation](#installation)
+[Packaging and internal release](#packaging-and-internal-release)
 [Operations](#operations)
 [Credentials](#credentials)
 [Compatibility](#compatibility)
@@ -17,6 +18,80 @@ SLNG is a unified voice AI platform offering text-to-speech, speech-to-text, and
 ## Installation
 
 Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) in the n8n community nodes documentation.
+
+## Packaging and internal release
+
+This package can be distributed internally as a normal n8n community node. Private or unverified community nodes require a self-hosted n8n instance.
+
+### Create a release artifact
+
+From the repository root:
+
+```bash
+npm install
+npm run lint
+npm run build
+npm pack
+```
+
+`npm pack` creates a tarball such as `n8n-nodes-slng-0.1.0.tgz`. The package only ships the `dist/` folder, as configured by the `files` entry in `package.json`.
+
+### Install from a tarball
+
+Use this for a quick internal test or for Docker images that copy the package artifact directly:
+
+```bash
+mkdir -p ~/.n8n/nodes
+cd ~/.n8n/nodes
+npm install /path/to/n8n-nodes-slng-0.1.0.tgz
+```
+
+Restart n8n after installing or upgrading the package.
+
+### Publish to a private registry
+
+Use this for repeatable internal distribution through GitHub Packages, npm private packages, Verdaccio, Artifactory, or another private npm registry.
+
+```bash
+npm version patch
+npm run lint
+npm run build
+npm publish --registry <private-registry-url>
+```
+
+If you change the package version, update `CHANGELOG.md` in the same change. Consumers can then install the versioned package:
+
+```bash
+mkdir -p ~/.n8n/nodes
+cd ~/.n8n/nodes
+npm install n8n-nodes-slng@0.1.0 --registry <private-registry-url>
+```
+
+### Bake into an n8n Docker image
+
+For production, prefer a custom n8n image with the package installed at build time:
+
+```dockerfile
+FROM n8nio/n8n:latest
+
+USER root
+
+COPY n8n-nodes-slng-0.1.0.tgz /tmp/
+RUN mkdir -p /home/node/.n8n/nodes \
+	&& cd /home/node/.n8n/nodes \
+	&& npm install /tmp/n8n-nodes-slng-0.1.0.tgz \
+	&& rm /tmp/n8n-nodes-slng-0.1.0.tgz
+
+USER node
+```
+
+Build and deploy the image:
+
+```bash
+docker build -t slng/n8n:with-slng-nodes .
+```
+
+When releasing an update, bump the package version, build a new tarball or publish to the private registry, rebuild the n8n image, and redeploy. Existing workflows keep using the same node type names (`slng` and `slngTrigger`), so updates should be backward-compatible unless the node schema changes.
 
 ## Operations
 
