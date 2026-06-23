@@ -1,0 +1,18 @@
+{
+	"node": "n8n-nodes-base.slng",
+	"nodeVersion": "1.0",
+	"codexVersion": "1.0",
+	"categories": ["Utility", "Communication"],
+	"resources": {
+		"credentialDocumentation": [
+			{
+				"url": "https://docs.slng.ai"
+			}
+		],
+		"primaryDocumentation": [
+			{
+				"url": "https://docs.slng.ai"
+			}
+		]
+	}
+}
