@@ -14,7 +14,7 @@ import { NodeApiError, NodeConnectionTypes, NodeOperationError } from 'n8n-workf
 const VOICE_API_BASE = 'https://api.slng.ai/v1';
 
 /**
- * Pull the human-readable error out of a slng API error response. slng returns
+ * Pull the human-readable error out of a SLNG API error response. SLNG returns
  * `{ detail: "..." }` (or a FastAPI-style array of validation errors), which n8n
  * otherwise buries under a generic "Bad request" message.
  */
@@ -45,13 +45,12 @@ function matchesFilter(name: string, value: string, filter?: string): boolean {
 	return name.toLowerCase().includes(needle) || value.toLowerCase().includes(needle);
 }
 
-/** List catalog models for a service type via the SLNG catalog API (paginated). */
-async function listCatalogModels(
+/** Fetch catalog models for a service type via the SLNG catalog API (paginated). */
+async function fetchCatalogModels(
 	ctx: ILoadOptionsFunctions,
 	serviceType: 'tts' | 'stt',
-	filter?: string,
-): Promise<INodeListSearchResult> {
-	const results: Array<{ name: string; value: string }> = [];
+): Promise<IDataObject[]> {
+	const models: IDataObject[] = [];
 	let page = 1;
 	let pages = 1;
 	do {
@@ -63,40 +62,48 @@ async function listCatalogModels(
 		})) as IDataObject;
 
 		const items = (response.items as IDataObject[]) ?? [];
-		for (const item of items) {
-			const value = item.code as string;
-			if (!value) continue;
-			const name = `${(item.name as string) || value} (${value})`;
-			if (matchesFilter(name, value, filter)) results.push({ name, value });
-		}
+		models.push(...items);
 
 		const meta = (response.meta as IDataObject) ?? {};
 		pages = (meta.pages as number) || 1;
 		page += 1;
 	} while (page <= pages && page <= 20);
 
+	return models;
+}
+
+/** List catalog models for a service type. */
+async function listCatalogModels(
+	ctx: ILoadOptionsFunctions,
+	serviceType: 'tts' | 'stt',
+	filter?: string,
+): Promise<INodeListSearchResult> {
+	const models = await fetchCatalogModels(ctx, serviceType);
+	const results: Array<{ name: string; value: string }> = [];
+	for (const item of models) {
+		const value = item.code as string;
+		if (!value) continue;
+		const name = `${(item.name as string) || value} (${value})`;
+		if (matchesFilter(name, value, filter)) results.push({ name, value });
+	}
+
 	return { results };
 }
 
-/** List the voices of the currently-selected TTS model via the catalog detail endpoint. */
+/** List the voices of the currently-selected TTS model from the catalog list response. */
 async function listModelVoices(
 	ctx: ILoadOptionsFunctions,
 	filter?: string,
 ): Promise<INodeListSearchResult> {
-	const model = ctx.getNodeParameter('ttsModel', undefined, { extractValue: true }) as string;
+	const model = ctx.getCurrentNodeParameter('ttsModel', { extractValue: true }) as string;
 	if (!model) return { results: [] };
 
-	// The model code contains '/' and ':' and maps to a multi-segment path — append it raw.
-	const response = (await ctx.helpers.httpRequestWithAuthentication.call(ctx, 'slngApi', {
-		method: 'GET',
-		url: `${VOICE_API_BASE}/catalog/models/${model}`,
-		json: true,
-	})) as IDataObject;
-
-	const voices = (response.voices as IDataObject[]) ?? [];
+	const models = await fetchCatalogModels(ctx, 'tts');
+	const selectedModel = models.find((item) => item.code === model);
+	const voices = (selectedModel?.voices as IDataObject[]) ?? [];
 	const results: Array<{ name: string; value: string }> = [];
 	for (const voice of voices) {
-		const value = voice.voice_id as string;
+		const value = (voice.voice_id ?? voice.voiceId ?? voice.id ?? voice.code) as string;
 		if (!value) continue;
 		const language = voice.language ? ` (${voice.language as string})` : '';
 		const name = `${(voice.name as string) || value}${language} — ${value}`;
@@ -108,15 +115,16 @@ async function listModelVoices(
 
 export class Slng implements INodeType {
 	description: INodeTypeDescription = {
-		displayName: 'slng',
+		displayName: 'SLNG',
 		name: 'slng',
 		icon: 'file:slng.svg',
 		group: ['transform'],
 		version: 1,
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
-		description: 'Generate speech and transcribe audio with the slng Voice API',
+		description:
+			'Use SLNG voice AI to generate text-to-speech audio or transcribe speech-to-text from audio files',
 		defaults: {
-			name: 'slng',
+			name: 'SLNG',
 		},
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
@@ -184,6 +192,8 @@ export class Slng implements INodeType {
 				default: { mode: 'list', value: 'slng/deepgram/aura:2-en' },
 				required: true,
 				description: 'The TTS model to use. Pick from the catalog or enter a model path by ID.',
+				hint:
+					'See the <a href="https://docs.slng.ai/models/tts" target="_blank">SLNG TTS models documentation</a> for the full model list.',
 				displayOptions: {
 					show: { resource: ['textToSpeech'], operation: ['generate'] },
 				},
@@ -212,6 +222,8 @@ export class Slng implements INodeType {
 				default: { mode: 'list', value: 'aura-2-thalia-en' },
 				description:
 					'The voice for the selected TTS model. Pick from the catalog or enter a voice ID.',
+				hint:
+					'See the <a href="https://docs.slng.ai/models" target="_blank">SLNG model catalog</a> and the Voices section for model-specific voice lists.',
 				displayOptions: {
 					show: { resource: ['textToSpeech'], operation: ['generate'] },
 				},
@@ -313,6 +325,8 @@ export class Slng implements INodeType {
 				default: { mode: 'list', value: 'slng/deepgram/nova:3-en' },
 				required: true,
 				description: 'The STT model to use. Pick from the catalog or enter a model path by ID.',
+				hint:
+					'See the <a href="https://docs.slng.ai/models/stt" target="_blank">SLNG STT models documentation</a> for the full model list.',
 				displayOptions: {
 					show: { resource: ['speechToText'], operation: ['transcribe'] },
 				},
@@ -454,7 +468,7 @@ export class Slng implements INodeType {
 				}
 				throw new NodeApiError(this.getNode(), error as JsonObject, {
 					itemIndex: i,
-					...(detail ? { message: `slng: ${detail}` } : {}),
+					...(detail ? { message: `SLNG: ${detail}` } : {}),
 				});
 			}
 		}

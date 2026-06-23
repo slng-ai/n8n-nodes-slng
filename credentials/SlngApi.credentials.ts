@@ -9,7 +9,7 @@ import type {
 export class SlngApi implements ICredentialType {
 	name = 'slngApi';
 
-	displayName = 'Slng API';
+	displayName = 'SLNG API';
 
 	icon: Icon = 'file:slng.svg';
 
@@ -24,7 +24,7 @@ export class SlngApi implements ICredentialType {
 			default: '',
 			required: true,
 			description:
-				'Your slng API key. Used as a Bearer token for both the Voice API and the Agents API.',
+				'Your SLNG API key. Used as a Bearer token for both the Voice API and the Agents API.',
 		},
 	];
 

@@ -23,7 +23,7 @@ function safeEqual(a: string, b: string): boolean {
 }
 
 /**
- * Pull the human-readable error out of a slng API error response. slng returns
+ * Pull the human-readable error out of a SLNG API error response. SLNG returns
  * `{ detail: "..." }` (or a FastAPI-style array of validation errors), which n8n
  * otherwise buries under a generic "Bad request" message.
  */
@@ -64,7 +64,7 @@ async function agentRequest(
 	} catch (error) {
 		const detail = slngErrorDetail(error);
 		throw new NodeApiError(ctx.getNode(), error as JsonObject, {
-			...(detail ? { message: `slng: ${detail}` } : {}),
+			...(detail ? { message: `SLNG: ${detail}` } : {}),
 			description: `${method} ${path} failed`,
 		});
 	}
@@ -80,6 +80,20 @@ function normalizeExistingTool(tool: IDataObject): IDataObject {
 	if (tool.type !== 'webhook' || !tool.auth_type) return tool;
 	const { auth_type, ...rest } = tool;
 	return { ...rest, auth: { type: auth_type } };
+}
+
+/**
+ * n8n blocks expression access to `$json.arguments` because `arguments` is a
+ * restricted JavaScript property name. SLNG webhook envelopes can use that key,
+ * so expose it to workflows as `toolArguments` instead.
+ */
+function normalizeWebhookBody(body: IDataObject): IDataObject {
+	if (!Object.prototype.hasOwnProperty.call(body, 'arguments')) return body;
+
+	const { arguments: toolArguments, ...rest } = body as IDataObject & {
+		arguments?: IDataObject[string];
+	};
+	return { ...rest, toolArguments };
 }
 
 /** Build the webhook tool object from the node parameters. */
@@ -211,16 +225,16 @@ function buildTool(ctx: IHookFunctions, webhookUrl: string, secret: string): IDa
 
 export class SlngTrigger implements INodeType {
 	description: INodeTypeDescription = {
-		displayName: 'slng Trigger',
+		displayName: 'SLNG Trigger',
 		name: 'slngTrigger',
 		icon: 'file:slng.svg',
 		group: ['trigger'],
 		version: 1,
 		subtitle: '={{$parameter["toolName"]}}',
 		description:
-			'Register a webhook tool on a slng agent and start a workflow when the agent calls it',
+			'Start workflows from SLNG voice agents by registering a secure webhook tool for agent calls',
 		defaults: {
-			name: 'slng Trigger',
+			name: 'SLNG Trigger',
 		},
 		inputs: [],
 		outputs: [NodeConnectionTypes.Main],
@@ -245,7 +259,7 @@ export class SlngTrigger implements INodeType {
 				type: 'resourceLocator',
 				default: { mode: 'list', value: '' },
 				required: true,
-				description: 'The existing slng agent to attach this tool to',
+				description: 'The existing SLNG agent to attach this tool to',
 				modes: [
 					{
 						displayName: 'From List',
@@ -610,7 +624,7 @@ export class SlngTrigger implements INodeType {
 				name: 'authentication',
 				type: 'options',
 				default: 'hmac',
-				description: 'How slng authenticates its calls to this webhook',
+				description: 'How SLNG authenticates its calls to this webhook',
 				displayOptions: {
 					show: { advancedSettings: [true] },
 				},
@@ -618,12 +632,12 @@ export class SlngTrigger implements INodeType {
 					{
 						name: 'Bearer Token',
 						value: 'bearer',
-						description: 'Slng sends an Authorization: Bearer header',
+						description: 'SLNG sends an Authorization: Bearer header',
 					},
 					{
 						name: 'HMAC Signature',
 						value: 'hmac',
-						description: 'Slng signs the body and sends an X-Signature-256 header',
+						description: 'SLNG signs the body and sends an X-Signature-256 header',
 					},
 					{ name: 'None', value: 'none' },
 				],
@@ -648,7 +662,7 @@ export class SlngTrigger implements INodeType {
 				name: 'httpMethod',
 				type: 'options',
 				default: 'POST',
-				description: 'HTTP method slng uses to call the webhook',
+				description: 'HTTP method SLNG uses to call the webhook',
 				displayOptions: {
 					show: { advancedSettings: [true] },
 				},
@@ -664,7 +678,7 @@ export class SlngTrigger implements INodeType {
 				name: 'responseMode',
 				type: 'options',
 				default: 'lastNode',
-				description: 'What slng receives back when it calls the tool',
+				description: 'What SLNG receives back when it calls the tool',
 				displayOptions: {
 					show: { advancedSettings: [true] },
 				},
@@ -700,7 +714,7 @@ export class SlngTrigger implements INodeType {
 							{
 								name: 'Envelope',
 								value: 'envelope',
-								description: 'Send slng metadata plus the arguments',
+								description: 'Send SLNG metadata plus the arguments',
 							},
 							{
 								name: 'Raw',
@@ -799,7 +813,7 @@ export class SlngTrigger implements INodeType {
 				const priorToolId = staticData.toolId as string | undefined;
 
 				// Drop any tool that is "ours" so re-registering replaces it instead of
-				// appending a duplicate. slng enforces unique tool names, so a leftover tool
+				// appending a duplicate. SLNG enforces unique tool names, so a leftover tool
 				// from a previous activation/test (same name, same URL, or our stored id)
 				// must be removed first — otherwise the agent rejects the update.
 				const tools = existing
@@ -879,8 +893,10 @@ export class SlngTrigger implements INodeType {
 			}
 		}
 
+		const body = this.getBodyData() as IDataObject;
+
 		return {
-			workflowData: [this.helpers.returnJsonArray(this.getBodyData())],
+			workflowData: [this.helpers.returnJsonArray(normalizeWebhookBody(body))],
 		};
 	}
 }
