@@ -1,8 +1,8 @@
 # n8n-nodes-slng
 
-This is an n8n community node. It lets you use _app/service name_ in your n8n workflows.
+This is an n8n community node. It lets you use [slng.ai](https://slng.ai) in your n8n workflows.
 
-_App/service name_ is _one or two sentences describing the service this node integrates with_.
+slng.ai is a unified voice AI platform offering text-to-speech, speech-to-text, and voice agents that can place and receive phone calls.
 
 [n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/sustainable-use-license/) workflow automation platform.
 
@@ -20,27 +20,45 @@ Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes
 
 ## Operations
 
-_List the operations supported by your node._
+This package contains two nodes:
+
+### slng
+
+- **Text to Speech → Generate** — convert text into spoken audio. The audio is returned as a binary file on the item.
+- **Speech to Text → Transcribe** — transcribe an audio file (from a binary field) into text.
+
+The **Model** and (for TTS) **Voice** fields are dropdowns populated live from the slng catalog API (`GET /v1/catalog/models`); the voice list is filtered to the chosen TTS model. Switch any of them to **By ID** to hardcode a model path or voice ID.
+
+### slng Trigger
+
+Registers a webhook tool on an existing slng agent when the workflow is activated, and removes it on deactivation. When the agent calls the tool during a call, the workflow runs and (in `Using Last Node` mode) returns its output to the agent.
+
+- **Tool type** — *LLM tool (contextual)*: the agent decides when to call it; you define the parameters it sends with a simple field builder (name, type, description, required). *System tool*: fires automatically on a call lifecycle event (call start, first user message, call end, tool succeeded/failed) with worker-populated arguments.
+- **Show Advanced Settings** — a toggle. Off by default with secure defaults (HMAC auth + auto-generated secret, `POST`, return last node's output). Turn it on to expose webhook path, authentication, HTTP method, response handling, result instructions and more.
+- **Webhook authentication** — *HMAC* (slng signs the body with `X-Signature-256`) or *Bearer* (`Authorization: Bearer`). Leave the secret empty to auto-generate one on activation; the node registers it with slng and validates incoming requests.
+- **Respond** (advanced) — *Using Last Node* (default) returns the workflow's final node output to the agent; *Immediately* acknowledges and runs the workflow in the background. To shape the exact JSON the agent receives, keep *Using Last Node* and make the final node (e.g. a **Set / Edit Fields** node) emit the object you want. (n8n's built-in **Respond to Webhook** node only works with core trigger types, not community triggers, so it isn't supported here.)
 
 ## Credentials
 
-_If users need to authenticate with the app/service, provide details here. You should include prerequisites (such as signing up with the service), available authentication methods, and how to set them up._
+You need a slng API key. Create one in the slng dashboard, then add a **slng API** credential in n8n and paste the key. The key is sent as a Bearer token and is validated against `GET https://api.slng.ai/v1/me`. The same credential is used for both the Voice API (`api.slng.ai`) and the Agents API (`api.agents.slng.ai`).
 
 ## Compatibility
 
-_State the minimum n8n version, as well as which versions you test against. You can also include any known version incompatibility issues._
+Built against the n8n nodes API version 1. Requires Node.js 18+.
 
 ## Usage
 
-_This is an optional section. Use it to help users with any difficult or confusing aspects of the node._
-
-_By the time users are looking for community nodes, they probably already know n8n basics. But if you expect new users, you can link to the [Try it out](https://docs.n8n.io/try-it-out/) documentation to help them get started._
+1. Add the **slng API** credential.
+2. To expose a workflow to a voice agent, add a **slng Trigger** node, pick an existing agent, define the tool, and activate the workflow. The tool is added to the agent automatically.
+3. To synthesize or transcribe audio inside any workflow, use the **slng** node.
 
 ## Resources
 
 * [n8n community nodes documentation](https://docs.n8n.io/integrations/#community-nodes)
-* _Link to app/service documentation._
+* [slng.ai documentation](https://docs.slng.ai)
 
 ## Version history
 
-_This is another optional section. If your node has multiple versions, include a short description of available versions and what changed, as well as any compatibility impact._
+### 0.1.0
+
+Initial release: slng API credential, slng node (TTS/STT), and slng Trigger node.
