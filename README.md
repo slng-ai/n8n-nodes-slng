@@ -86,7 +86,7 @@ Versioning follows the same style as `gateway-specs`:
 - `fix:`, `perf:`, `refactor:`, `docs:`, `chore:`, `ci:`, `test:`, `style:`, and `build:` create patch releases
 - `BREAKING CHANGE:` in the commit body, or `!` in the commit header, creates a major release
 
-Before enabling the workflow for the first time, bootstrap the current version:
+The workflow bootstraps the current version on its first run by creating `v0.1.0` from the initial commit if that tag does not already exist. If you want to do this manually before merging the release workflow, create the tag from the commit that contains `package.json` version `0.1.0`:
 
 ```bash
 git tag v0.1.0
