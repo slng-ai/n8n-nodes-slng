@@ -6,9 +6,9 @@
 #   - BREAKING CHANGE / !: major
 #   - fix, perf, refactor, docs, chore, ci, test, style, build: patch
 #
-# The first release should be bootstrapped by creating/pushing v0.1.0 from the
-# commit that contains package.json version 0.1.0. After that, semantic-release
-# calculates the next version from commits since the latest v* tag.
+# The first release is bootstrapped with v0.1.0 from the initial commit that
+# contains package.json version 0.1.0. After that, semantic-release calculates
+# the next version from commits since the latest v* tag.
 #
 # NPM publishing:
 #   Preferred: npm Trusted Publishing with GitHub OIDC. Configure npmjs.com with
@@ -54,6 +54,17 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Bootstrap initial release tag
+        run: |
+          if git rev-parse -q --verify refs/tags/v0.1.0 >/dev/null; then
+            echo "Bootstrap tag v0.1.0 already exists."
+            exit 0
+          fi
+
+          bootstrap_commit="$(git rev-list --max-parents=0 HEAD)"
+          git tag v0.1.0 "$bootstrap_commit"
+          git push origin v0.1.0
 
       - name: Run build check
         run: npm run build
