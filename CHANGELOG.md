@@ -1,3 +1,9 @@
+## [0.2.0](https://github.com/slng-ai/n8n-nodes-slng/compare/v0.1.0...v0.2.0) (2026-06-25)
+
+### Features
+
+* add agent dispatch action and workflow templates ([98c48c0](https://github.com/slng-ai/n8n-nodes-slng/commit/98c48c001102e8d630031a6ccc0ba04b7b392ff2))
+
 # Changelog
 
 ## 0.1.0
