@@ -55,17 +55,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Bootstrap initial release tag
-        run: |
-          if git rev-parse -q --verify refs/tags/v0.1.0 >/dev/null; then
-            echo "Bootstrap tag v0.1.0 already exists."
-            exit 0
-          fi
-
-          bootstrap_commit="$(git rev-list --max-parents=0 HEAD)"
-          git tag v0.1.0 "$bootstrap_commit"
-          git push origin v0.1.0
-
       - name: Run build check
         run: npm run build
 

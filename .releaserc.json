@@ -61,6 +61,7 @@
             "label": "npm package tarball"
           }
         ],
+        "failComment": false,
         "successComment": false,
         "releasedLabels": false
       }
