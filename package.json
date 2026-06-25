@@ -13,7 +13,7 @@
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/slng-ai/n8n-nodes-slng.git"
+        "url": "git+https://github.com/slng-ai/n8n-nodes-slng.git"
     },
     "scripts": {
         "build": "n8n-node build",
@@ -22,8 +22,7 @@
         "lint": "n8n-node lint",
         "lint:fix": "n8n-node lint --fix",
         "prepack": "npm run build",
-        "release": "semantic-release",
-        "prepublishOnly": "n8n-node prerelease"
+        "release": "semantic-release"
     },
     "publishConfig": {
         "registry": "https://registry.npmjs.org/",
