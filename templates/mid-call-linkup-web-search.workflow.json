@@ -1,0 +1,144 @@
+{
+  "name": "SLNG - Mid-Call Linkup Web Search",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "Contextual SLNG tool for live web search. Assign SLNG and Linkup credentials. The final node returns { answer, sources } to the agent.",
+        "height": 160,
+        "width": 420,
+        "color": 4
+      },
+      "id": "47cf3d62-905d-4b26-98cf-0221cb8852cc",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -700,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "agentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_AGENT_ID"
+        },
+        "toolName": "web_search",
+        "toolDescription": "Search the web for current information and return a short answer with sources.",
+        "toolType": "contextual",
+        "advancedSettings": true,
+        "contextualParameters": {
+          "parameter": [
+            {
+              "name": "query",
+              "type": "string",
+              "description": "The question to search for",
+              "required": true
+            },
+            {
+              "name": "topic",
+              "type": "string",
+              "description": "Optional topic or context to narrow the search"
+            },
+            {
+              "name": "domain",
+              "type": "string",
+              "description": "Optional domain to search, for example docs.slng.ai"
+            }
+          ]
+        },
+        "llmResultInstructions": "Use the answer field as the spoken response. Mention sources only if the caller asks.",
+        "responseMode": "lastNode",
+        "options": {
+          "webhookFormat": "envelope",
+          "waitForResponse": true,
+          "showResultsToLlm": true
+        }
+      },
+      "id": "d08d0d29-7c46-4827-8a12-b733d8e44d8a",
+      "name": "SLNG Web Search Tool",
+      "type": "n8n-nodes-slng.slngTrigger",
+      "typeVersion": 1,
+      "position": [
+        -520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.linkup.so/v1/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ q: [$json.toolArguments?.query, $json.toolArguments?.topic].filter(Boolean).join(' '), depth: 'standard', outputType: 'sourcedAnswer', includeDomains: $json.toolArguments?.domain ? [$json.toolArguments.domain] : undefined, maxResults: 5 }) }}"
+      },
+      "id": "8d33699e-b3cb-4d62-9915-74096c5dfeda",
+      "name": "Search Linkup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json;\nconst results = Array.isArray(body.results) ? body.results : [];\nconst answer = body.answer || body.sourcedAnswer || results[0]?.content || 'I could not find a confident answer.';\nconst sources = results.slice(0, 3).map((r) => ({ title: r.name || r.title || r.url, url: r.url, snippet: r.content || r.snippet || '' }));\nreturn [{ json: { answer, sources } }];"
+      },
+      "id": "174e8163-931d-4c52-9bc8-4960656d56ee",
+      "name": "Return Answer to Agent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        0
+      ]
+    }
+  ],
+  "pinData": {
+    "SLNG Web Search Tool": [
+      {
+        "json": {
+          "toolArguments": {
+            "query": "What does SLNG outbound calling require?",
+            "topic": "voice agent telephony",
+            "domain": "docs.slng.ai"
+          }
+        }
+      }
+    ]
+  },
+  "connections": {
+    "SLNG Web Search Tool": {
+      "main": [
+        [
+          {
+            "node": "Search Linkup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Linkup": {
+      "main": [
+        [
+          {
+            "node": "Return Answer to Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

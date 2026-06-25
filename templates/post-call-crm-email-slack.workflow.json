@@ -1,0 +1,256 @@
+{
+  "name": "SLNG - Post-Call CRM, Email, and Slack",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "Post-call workflow. Assign SLNG, HubSpot, Gmail, and Slack credentials. Template variables customer_email and customer_name should be available on dispatched calls when possible.",
+        "height": 180,
+        "width": 460,
+        "color": 4
+      },
+      "id": "0d52dc85-f7c9-4849-a2e0-97ddf5a3ca26",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -780,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "agentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_AGENT_ID"
+        },
+        "toolName": "post_call_follow_up",
+        "toolDescription": "After a call ends, update HubSpot, send a follow-up email, and notify Slack.",
+        "toolType": "system",
+        "advancedSettings": true,
+        "systemTriggers": {
+          "trigger": [
+            {
+              "event": "call_end"
+            }
+          ]
+        },
+        "systemArguments": {
+          "argument": [
+            {
+              "name": "call_id",
+              "type": "string",
+              "sourceType": "call_id",
+              "required": true
+            },
+            {
+              "name": "phone_number",
+              "type": "string",
+              "sourceType": "phone_number"
+            },
+            {
+              "name": "call_end_reason",
+              "type": "string",
+              "sourceType": "call_end_reason"
+            },
+            {
+              "name": "customer_email",
+              "type": "string",
+              "sourceType": "template",
+              "sourceTemplate": "{{customer_email}}"
+            },
+            {
+              "name": "customer_name",
+              "type": "string",
+              "sourceType": "template",
+              "sourceTemplate": "{{customer_name}}"
+            },
+            {
+              "name": "transcript",
+              "type": "transcript_messages",
+              "sourceType": "transcript_messages",
+              "sourceMaxMessages": 200
+            }
+          ]
+        },
+        "responseMode": "onReceived",
+        "options": {
+          "webhookFormat": "envelope",
+          "waitForResponse": false,
+          "showResultsToLlm": false
+        }
+      },
+      "id": "27fbd908-f610-4ff6-8466-dc9d0988197d",
+      "name": "SLNG Post-Call Trigger",
+      "type": "n8n-nodes-slng.slngTrigger",
+      "typeVersion": 1,
+      "position": [
+        -600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const args = $json.toolArguments || {};\nconst transcript = Array.isArray(args.transcript) ? args.transcript : [];\nconst transcriptText = transcript.map((m) => `${m.role || m.speaker || 'speaker'}: ${m.text || m.content || ''}`.trim()).filter(Boolean).join('\\n');\nconst customerEmail = args.customer_email && !String(args.customer_email).includes('{{') ? args.customer_email : 'customer@example.com';\nconst customerName = args.customer_name && !String(args.customer_name).includes('{{') ? args.customer_name : 'Customer';\nconst summary = transcriptText ? transcriptText.slice(0, 1200) : 'No transcript provided.';\nreturn [{ json: { callId: args.call_id || 'unknown-call', phoneNumber: args.phone_number || 'unknown', endReason: args.call_end_reason || 'unknown', customerEmail, customerName, transcriptText, summary, followUpSubject: 'Thanks for speaking with us', followUpBody: `Hi ${customerName},\\n\\nThanks for speaking with us today. We will follow up on the next steps discussed during the call.\\n\\nBest,\\nSLNG Team` } }];"
+      },
+      "id": "22adf0b2-1487-4c84-8880-9e9e466653f2",
+      "name": "Prepare Follow-Up Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ filterGroups: [{ filters: [{ propertyName: 'email', operator: 'EQ', value: $json.customerEmail }] }], properties: ['email', 'firstname', 'lastname'], limit: 1 }) }}"
+      },
+      "id": "dd1bb77a-8559-4f24-b302-411fe2acf169",
+      "name": "Find HubSpot Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -40,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { hs_timestamp: new Date().toISOString(), hs_note_body: `SLNG call ${$node['Prepare Follow-Up Data'].json.callId}\\nPhone: ${$node['Prepare Follow-Up Data'].json.phoneNumber}\\nReason: ${$node['Prepare Follow-Up Data'].json.endReason}\\n\\n${$node['Prepare Follow-Up Data'].json.summary}` }, associations: $json.results?.[0]?.id ? [{ to: { id: $json.results[0].id }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 202 }] }] : [] }) }}"
+      },
+      "id": "ec77e045-4b36-4eb6-bf54-90da8253739f",
+      "name": "Create HubSpot Note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{$json.customerEmail}}",
+        "subject": "={{$json.followUpSubject}}",
+        "message": "={{$json.followUpBody}}",
+        "options": {}
+      },
+      "id": "74c76bb5-a38a-44e5-9625-33ab02f5acf2",
+      "name": "Send Gmail Follow-Up",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -40,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channelId": "YOUR_SLACK_CHANNEL_ID",
+        "text": "=Post-call automation ran for {{$json.customerName}} ({{$json.customerEmail}}). Call {{$json.callId}} ended: {{$json.endReason}}.",
+        "otherOptions": {}
+      },
+      "id": "3d8d11ad-1124-4a34-a477-04a57fce822f",
+      "name": "Notify Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        100
+      ]
+    }
+  ],
+  "pinData": {
+    "SLNG Post-Call Trigger": [
+      {
+        "json": {
+          "toolArguments": {
+            "call_id": "call_demo_456",
+            "phone_number": "+15551234567",
+            "call_end_reason": "completed",
+            "customer_email": "customer@example.com",
+            "customer_name": "Ada Lovelace",
+            "transcript": [
+              {
+                "role": "assistant",
+                "text": "I can send a summary after this call."
+              },
+              {
+                "role": "user",
+                "text": "Please email me the next steps."
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "connections": {
+    "SLNG Post-Call Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Follow-Up Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Follow-Up Data": {
+      "main": [
+        [
+          {
+            "node": "Find HubSpot Contact",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Gmail Follow-Up",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notify Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find HubSpot Contact": {
+      "main": [
+        [
+          {
+            "node": "Create HubSpot Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

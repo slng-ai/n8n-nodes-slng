@@ -12,6 +12,7 @@ SLNG is a unified voice AI platform offering text-to-speech, speech-to-text, and
 [Credentials](#credentials)
 [Compatibility](#compatibility)
 [Usage](#usage)
+[Templates](#templates)
 [Resources](#resources)
 [Version history](#version-history)
 
@@ -131,6 +132,7 @@ This package contains two nodes:
 
 - **Text to Speech → Generate** — convert text into spoken audio. The audio is returned as a binary file on the item.
 - **Speech to Text → Transcribe** — transcribe an audio file (from a binary field) into text.
+- **Agent → Dispatch Call** — place an outbound phone call from a SLNG voice agent. The node checks that the selected agent has outbound telephony configured before dispatching.
 
 The **Model** and (for TTS) **Voice** fields are dropdowns populated live from the SLNG catalog API (`GET /v1/catalog/models`); the voice list is filtered to the chosen TTS model. Switch any of them to **By ID** to hardcode a model path or voice ID.
 
@@ -159,7 +161,19 @@ Built against the n8n nodes API version 1. Requires Node.js 18+.
 
 1. Add the **SLNG API** credential.
 2. To expose a workflow to a voice agent, add a **SLNG Trigger** node, pick an existing agent, define the tool, and activate the workflow. The tool is added to the agent automatically.
-3. To synthesize or transcribe audio inside any workflow, use the **SLNG** node.
+3. To synthesize, transcribe, or dispatch outbound agent calls inside any workflow, use the **SLNG** node.
+
+## Templates
+
+Multi-node workflow templates live in [`templates/`](templates/). They demonstrate practical SLNG voice-agent automations:
+
+- End-of-call logging to Notion and Slack.
+- Mid-call Linkup web search.
+- Mid-call HubSpot customer lookup.
+- Post-call CRM note, Gmail follow-up, and Slack notification.
+- Outbound call campaign from HubSpot contacts.
+
+Import them into n8n with **Workflows → Import from File**, then replace placeholder IDs and assign your credentials.
 
 ## Resources
 
