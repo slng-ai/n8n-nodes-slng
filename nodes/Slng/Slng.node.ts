@@ -11,6 +11,7 @@ import type {
 } from 'n8n-workflow';
 import { NodeApiError, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
+const AGENTS_API_BASE = 'https://api.agents.slng.ai/v1';
 const VOICE_API_BASE = 'https://api.slng.ai/v1';
 
 /**
@@ -43,6 +44,43 @@ function matchesFilter(name: string, value: string, filter?: string): boolean {
 	if (!filter) return true;
 	const needle = filter.toLowerCase();
 	return name.toLowerCase().includes(needle) || value.toLowerCase().includes(needle);
+}
+
+/** Wrapper around authenticated SLNG Agents API requests. */
+async function agentRequest(
+	ctx: IExecuteFunctions | ILoadOptionsFunctions,
+	method: 'GET' | 'POST',
+	path: string,
+	body?: IDataObject,
+): Promise<IDataObject | IDataObject[]> {
+	try {
+		return (await ctx.helpers.httpRequestWithAuthentication.call(ctx, 'slngApi', {
+			method,
+			url: `${AGENTS_API_BASE}${path}`,
+			body,
+			json: true,
+		})) as IDataObject | IDataObject[];
+	} catch (error) {
+		const detail = slngErrorDetail(error);
+		throw new NodeApiError(ctx.getNode(), error as JsonObject, {
+			...(detail ? { message: `SLNG: ${detail}` } : {}),
+			description: `${method} ${path} failed`,
+		});
+	}
+}
+
+/** Convert n8n key/value rows into the API's per-call arguments object. */
+function buildDispatchArguments(dispatchArguments: IDataObject): IDataObject {
+	const rows = (dispatchArguments.argument as IDataObject[]) ?? [];
+	const args: IDataObject = {};
+
+	for (const row of rows) {
+		const name = String(row.name ?? '').trim();
+		if (!name) continue;
+		args[name] = String(row.value ?? '');
+	}
+
+	return args;
 }
 
 /** Fetch catalog models for a service type via the SLNG catalog API (paginated). */
@@ -143,6 +181,10 @@ export class Slng implements INodeType {
 				noDataExpression: true,
 				options: [
 					{
+						name: 'Agent',
+						value: 'agent',
+					},
+					{
 						name: 'Speech to Text',
 						value: 'speechToText',
 					},
@@ -152,6 +194,101 @@ export class Slng implements INodeType {
 					},
 				],
 				default: 'textToSpeech',
+			},
+
+			// Agent
+			{
+				displayName: 'Operation',
+				name: 'operation',
+				type: 'options',
+				noDataExpression: true,
+				displayOptions: {
+					show: { resource: ['agent'] },
+				},
+				options: [
+					{
+						name: 'Dispatch Call',
+						value: 'dispatchCall',
+						action: 'Dispatch an outbound call',
+						description: 'Dispatch a phone call from a SLNG voice agent',
+					},
+				],
+				default: 'dispatchCall',
+			},
+			{
+				displayName: 'Agent',
+				name: 'agentId',
+				type: 'resourceLocator',
+				default: { mode: 'list', value: '' },
+				required: true,
+				description: 'The SLNG voice agent that will place the outbound call',
+				displayOptions: {
+					show: { resource: ['agent'], operation: ['dispatchCall'] },
+				},
+				modes: [
+					{
+						displayName: 'From List',
+						name: 'list',
+						type: 'list',
+						typeOptions: {
+							searchListMethod: 'searchAgents',
+							searchable: true,
+						},
+					},
+					{
+						displayName: 'By ID',
+						name: 'id',
+						type: 'string',
+						placeholder: 'e.g. 550e8400-e29b-41d4-a716-446655440000',
+					},
+				],
+			},
+			{
+				displayName: 'Phone Number',
+				name: 'phoneNumber',
+				type: 'string',
+				default: '',
+				required: true,
+				placeholder: '+15551234567',
+				description: 'The E.164 phone number to call',
+				displayOptions: {
+					show: { resource: ['agent'], operation: ['dispatchCall'] },
+				},
+			},
+			{
+				displayName: 'Arguments',
+				name: 'dispatchArguments',
+				type: 'fixedCollection',
+				typeOptions: { multipleValues: true, maxValue: 32 },
+				default: {},
+				placeholder: 'Add Argument',
+				description:
+					'Per-call template arguments. Argument values are sent to SLNG as strings.',
+				displayOptions: {
+					show: { resource: ['agent'], operation: ['dispatchCall'] },
+				},
+				options: [
+					{
+						name: 'argument',
+						displayName: 'Argument',
+						values: [
+							{
+								displayName: 'Name',
+								name: 'name',
+								type: 'string',
+								default: '',
+								placeholder: 'customer_name',
+							},
+							{
+								displayName: 'Value',
+								name: 'value',
+								type: 'string',
+								default: '',
+								placeholder: 'Ada',
+							},
+						],
+					},
+				],
 			},
 
 			// Text to Speech
@@ -371,6 +508,21 @@ export class Slng implements INodeType {
 			): Promise<INodeListSearchResult> {
 				return listModelVoices(this, filter);
 			},
+			async searchAgents(
+				this: ILoadOptionsFunctions,
+				filter?: string,
+			): Promise<INodeListSearchResult> {
+				const agents = (await agentRequest(this, 'GET', '/agents')) as IDataObject[];
+				const results = (Array.isArray(agents) ? agents : [])
+					.map((agent) => {
+						const value = agent.id as string;
+						const name = ((agent.name as string) || value) as string;
+						return { name, value };
+					})
+					.filter((agent) => agent.value && matchesFilter(agent.name, agent.value, filter));
+
+				return { results };
+			},
 		},
 	};
 
@@ -383,7 +535,44 @@ export class Slng implements INodeType {
 
 		for (let i = 0; i < items.length; i++) {
 			try {
-				if (resource === 'textToSpeech' && operation === 'generate') {
+				if (resource === 'agent' && operation === 'dispatchCall') {
+					const agentId = this.getNodeParameter('agentId', i, '', {
+						extractValue: true,
+					}) as string;
+					const phoneNumber = this.getNodeParameter('phoneNumber', i) as string;
+					const dispatchArguments = this.getNodeParameter(
+						'dispatchArguments',
+						i,
+						{},
+					) as IDataObject;
+
+					const agent = (await agentRequest(this, 'GET', `/agents/${agentId}`)) as IDataObject;
+					if (!agent.sip_outbound_trunk_id) {
+						throw new NodeOperationError(
+							this.getNode(),
+							'Outbound telephony is not configured for this SLNG agent. Configure an outbound SIP trunk before dispatching calls.',
+							{ itemIndex: i },
+						);
+					}
+
+					const body: IDataObject = {
+						phone_number: phoneNumber,
+					};
+					const args = buildDispatchArguments(dispatchArguments);
+					if (Object.keys(args).length > 0) body.arguments = args;
+
+					const response = (await agentRequest(
+						this,
+						'POST',
+						`/agents/${agentId}/calls`,
+						body,
+					)) as IDataObject;
+
+					returnData.push({
+						json: response,
+						pairedItem: { item: i },
+					});
+				} else if (resource === 'textToSpeech' && operation === 'generate') {
 					const text = this.getNodeParameter('text', i) as string;
 					const model = this.getNodeParameter('ttsModel', i, '', { extractValue: true }) as string;
 					const voice = this.getNodeParameter('voice', i, '', { extractValue: true }) as string;

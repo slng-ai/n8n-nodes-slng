@@ -1,0 +1,203 @@
+{
+  "name": "SLNG - End Call to Notion and Slack",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "Logs ended SLNG voice-agent calls. Replace YOUR_AGENT_ID, YOUR_NOTION_DATABASE_ID, and YOUR_SLACK_CHANNEL_ID, then assign SLNG, Notion, and Slack credentials.",
+        "height": 180,
+        "width": 420,
+        "color": 4
+      },
+      "id": "3f6ac7e7-6bb6-4b2e-9047-c910f24670e1",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -700,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "agentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_AGENT_ID"
+        },
+        "toolName": "log_call_end",
+        "toolDescription": "Log call transcript and outcome when a call ends.",
+        "toolType": "system",
+        "advancedSettings": true,
+        "systemTriggers": {
+          "trigger": [
+            {
+              "event": "call_end"
+            }
+          ]
+        },
+        "systemArguments": {
+          "argument": [
+            {
+              "name": "call_id",
+              "type": "string",
+              "sourceType": "call_id",
+              "required": true
+            },
+            {
+              "name": "phone_number",
+              "type": "string",
+              "sourceType": "phone_number"
+            },
+            {
+              "name": "call_end_reason",
+              "type": "string",
+              "sourceType": "call_end_reason"
+            },
+            {
+              "name": "transcript",
+              "type": "transcript_messages",
+              "sourceType": "transcript_messages",
+              "sourceMaxMessages": 200
+            }
+          ]
+        },
+        "responseMode": "onReceived",
+        "options": {
+          "webhookFormat": "envelope",
+          "waitForResponse": false,
+          "showResultsToLlm": false
+        }
+      },
+      "id": "69d6ff07-616a-43f0-823d-01dbf46b5cc3",
+      "name": "SLNG Call End",
+      "type": "n8n-nodes-slng.slngTrigger",
+      "typeVersion": 1,
+      "position": [
+        -520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const args = $json.toolArguments || {};\nconst transcript = Array.isArray(args.transcript) ? args.transcript : [];\nconst lines = transcript.map((m) => `${m.role || m.speaker || 'speaker'}: ${m.text || m.content || ''}`.trim()).filter(Boolean);\nconst summary = lines.slice(-12).join('\\n') || 'No transcript messages were provided.';\nreturn [{ json: { callId: args.call_id || $json.call_id || 'unknown-call', phoneNumber: args.phone_number || 'unknown', endReason: args.call_end_reason || 'unknown', transcriptText: lines.join('\\n'), shortSummary: summary } }];"
+      },
+      "id": "7bd4c871-c8f2-4ba3-8dc9-e7551e40b3dd",
+      "name": "Prepare Call Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ parent: { database_id: 'YOUR_NOTION_DATABASE_ID' }, properties: { Name: { title: [{ text: { content: `Call ${$json.callId}` } }] }, Phone: { rich_text: [{ text: { content: $json.phoneNumber } }] }, Status: { select: { name: $json.endReason } } }, children: [{ object: 'block', type: 'paragraph', paragraph: { rich_text: [{ text: { content: $json.shortSummary.slice(0, 1900) } }] } }] }) }}"
+      },
+      "id": "345c3393-a215-495a-b278-df0057ac0af0",
+      "name": "Create Notion Call Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        20,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channelId": "YOUR_SLACK_CHANNEL_ID",
+        "text": "=SLNG call ended\\nCall: {{$node[\"Prepare Call Log\"].json.callId}}\\nPhone: {{$node[\"Prepare Call Log\"].json.phoneNumber}}\\nReason: {{$node[\"Prepare Call Log\"].json.endReason}}\\n\\n{{$node[\"Prepare Call Log\"].json.shortSummary}}",
+        "otherOptions": {}
+      },
+      "id": "3c47c54c-0ffe-4540-b59d-b9c4b0a9d032",
+      "name": "Post Slack Summary",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        300,
+        0
+      ]
+    }
+  ],
+  "pinData": {
+    "SLNG Call End": [
+      {
+        "json": {
+          "toolArguments": {
+            "call_id": "call_demo_123",
+            "phone_number": "+15551234567",
+            "call_end_reason": "completed",
+            "transcript": [
+              {
+                "role": "assistant",
+                "text": "Thanks for calling SLNG."
+              },
+              {
+                "role": "user",
+                "text": "Please send me the details by email."
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "connections": {
+    "SLNG Call End": {
+      "main": [
+        [
+          {
+            "node": "Prepare Call Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Call Log": {
+      "main": [
+        [
+          {
+            "node": "Create Notion Call Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Notion Call Page": {
+      "main": [
+        [
+          {
+            "node": "Post Slack Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

@@ -1,0 +1,149 @@
+{
+  "name": "SLNG - Mid-Call HubSpot Lookup",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "Contextual SLNG tool for CRM lookup. Assign SLNG and HubSpot credentials. The final node returns a concise customer summary to the agent.",
+        "height": 160,
+        "width": 420,
+        "color": 4
+      },
+      "id": "e4d5ed60-24f0-4b7d-8c96-0918eda28d59",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -700,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "agentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_AGENT_ID"
+        },
+        "toolName": "lookup_customer",
+        "toolDescription": "Look up customer information from HubSpot by email, phone number, company, or name.",
+        "toolType": "contextual",
+        "advancedSettings": true,
+        "contextualParameters": {
+          "parameter": [
+            {
+              "name": "email",
+              "type": "string",
+              "description": "Customer email address"
+            },
+            {
+              "name": "phone",
+              "type": "string",
+              "description": "Customer phone number"
+            },
+            {
+              "name": "company",
+              "type": "string",
+              "description": "Customer company name"
+            },
+            {
+              "name": "contact_name",
+              "type": "string",
+              "description": "Customer full name"
+            }
+          ]
+        },
+        "llmResultInstructions": "Summarize only the customer facts that are relevant to the caller's request.",
+        "responseMode": "lastNode",
+        "options": {
+          "webhookFormat": "envelope",
+          "waitForResponse": true,
+          "showResultsToLlm": true
+        }
+      },
+      "id": "9f9d6ec3-4cf5-4a80-820e-7979bb1d933e",
+      "name": "SLNG Customer Lookup Tool",
+      "type": "n8n-nodes-slng.slngTrigger",
+      "typeVersion": 1,
+      "position": [
+        -520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ filterGroups: [{ filters: Object.entries({ email: $json.toolArguments?.email, phone: $json.toolArguments?.phone, company: $json.toolArguments?.company }).filter(([, value]) => value).map(([propertyName, value]) => ({ propertyName, operator: 'EQ', value })) }], query: $json.toolArguments?.contact_name || undefined, properties: ['firstname', 'lastname', 'email', 'phone', 'company', 'lifecyclestage', 'hs_lead_status'], limit: 3 }) }}"
+      },
+      "id": "de64dc03-0fb9-4ead-8b8a-03f79cb64955",
+      "name": "Search HubSpot Contacts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const contacts = Array.isArray($json.results) ? $json.results : [];\nif (!contacts.length) return [{ json: { answer: 'I could not find a matching customer in HubSpot.', customer: null, next_step: 'Ask the caller for another identifier such as email or phone number.' } }];\nconst contact = contacts[0];\nconst p = contact.properties || {};\nconst name = [p.firstname, p.lastname].filter(Boolean).join(' ') || p.email || 'Matched customer';\nreturn [{ json: { answer: `${name} is in HubSpot${p.company ? ` at ${p.company}` : ''}. Lifecycle stage: ${p.lifecyclestage || 'unknown'}. Lead status: ${p.hs_lead_status || 'unknown'}.`, customer: { id: contact.id, name, email: p.email, phone: p.phone, company: p.company, lifecycleStage: p.lifecyclestage, leadStatus: p.hs_lead_status }, next_step: 'Use this context to personalize the conversation.' } }];"
+      },
+      "id": "481e1e31-fc22-460c-b083-e96f91516653",
+      "name": "Return Customer Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        0
+      ]
+    }
+  ],
+  "pinData": {
+    "SLNG Customer Lookup Tool": [
+      {
+        "json": {
+          "toolArguments": {
+            "email": "customer@example.com",
+            "phone": "+15551234567",
+            "company": "Example Corp",
+            "contact_name": "Ada Lovelace"
+          }
+        }
+      }
+    ]
+  },
+  "connections": {
+    "SLNG Customer Lookup Tool": {
+      "main": [
+        [
+          {
+            "node": "Search HubSpot Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search HubSpot Contacts": {
+      "main": [
+        [
+          {
+            "node": "Return Customer Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

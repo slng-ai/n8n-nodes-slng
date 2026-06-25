@@ -1,0 +1,224 @@
+{
+  "name": "SLNG - Outbound Call Campaign Starter",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "Starter campaign workflow. Use either Manual Trigger or Schedule Trigger. Replace YOUR_AGENT_ID and assign HubSpot, SLNG, and Slack credentials. The SLNG agent must have outbound telephony configured.",
+        "height": 180,
+        "width": 480,
+        "color": 4
+      },
+      "id": "db6e785a-619b-4c39-8363-f2ca2d10383d",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -880,
+        -320
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "07a727ab-9290-4551-879e-f982dd5d2250",
+      "name": "Manual Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -760,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "0db3e242-ebca-4a20-afc5-4bb6899bc64c",
+      "name": "Weekly Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -760,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ filterGroups: [{ filters: [{ propertyName: 'phone', operator: 'HAS_PROPERTY' }] }], properties: ['firstname', 'lastname', 'email', 'phone', 'company'], limit: 10 }) }}"
+      },
+      "id": "018c74b9-2077-4721-a54c-334471cb3b16",
+      "name": "Get HubSpot Contacts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -480,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const contacts = Array.isArray($json.results) ? $json.results : [];\nreturn contacts.map((contact) => { const p = contact.properties || {}; return { json: { hubspotContactId: contact.id, firstName: p.firstname || '', lastName: p.lastname || '', email: p.email || '', phone: p.phone || '+15551234567', company: p.company || '' } }; });"
+      },
+      "id": "06122965-22ef-4fe7-9181-70928c06db43",
+      "name": "Split Contacts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "agent",
+        "operation": "dispatchCall",
+        "agentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_AGENT_ID"
+        },
+        "phoneNumber": "={{$json.phone}}",
+        "dispatchArguments": {
+          "argument": [
+            {
+              "name": "customer_name",
+              "value": "={{[$json.firstName, $json.lastName].filter(Boolean).join(' ')}}"
+            },
+            {
+              "name": "customer_email",
+              "value": "={{$json.email}}"
+            },
+            {
+              "name": "company",
+              "value": "={{$json.company}}"
+            },
+            {
+              "name": "hubspot_contact_id",
+              "value": "={{$json.hubspotContactId}}"
+            }
+          ]
+        }
+      },
+      "id": "3ac3b4df-4786-4ebd-86f9-30e5c1d01d89",
+      "name": "Dispatch SLNG Call",
+      "type": "n8n-nodes-slng.slng",
+      "typeVersion": 1,
+      "position": [
+        120,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channelId": "YOUR_SLACK_CHANNEL_ID",
+        "text": "=Dispatched SLNG call. Call ID: {{$json.call_id || 'unknown'}}. Message: {{$json.message || 'No message returned'}}.",
+        "otherOptions": {}
+      },
+      "id": "d55f2d28-f85f-4530-9859-a610e54d5bdf",
+      "name": "Post Dispatch Result",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        420,
+        20
+      ]
+    }
+  ],
+  "pinData": {
+    "Get HubSpot Contacts": [
+      {
+        "json": {
+          "results": [
+            {
+              "id": "12345",
+              "properties": {
+                "firstname": "Ada",
+                "lastname": "Lovelace",
+                "email": "customer@example.com",
+                "phone": "+15551234567",
+                "company": "Example Corp"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Manual Start": {
+      "main": [
+        [
+          {
+            "node": "Get HubSpot Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Weekly Schedule": {
+      "main": [
+        [
+          {
+            "node": "Get HubSpot Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get HubSpot Contacts": {
+      "main": [
+        [
+          {
+            "node": "Split Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Contacts": {
+      "main": [
+        [
+          {
+            "node": "Dispatch SLNG Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch SLNG Call": {
+      "main": [
+        [
+          {
+            "node": "Post Dispatch Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}
