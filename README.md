@@ -20,6 +20,8 @@ SLNG is a unified voice AI platform offering text-to-speech, speech-to-text, and
 
 Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) in the n8n community nodes documentation.
 
+You can also browse n8n community node packages on npm using the [`n8n-community-node-package` keyword search](https://www.npmjs.com/search?q=keywords%3An8n-community-node-package).
+
 ## Packaging and internal release
 
 This package can be distributed internally as a normal n8n community node. Private or unverified community nodes require a self-hosted n8n instance.
@@ -87,7 +89,7 @@ Versioning follows the same style as `gateway-specs`:
 - `fix:`, `perf:`, `refactor:`, `docs:`, `chore:`, `ci:`, `test:`, `style:`, and `build:` create patch releases
 - `BREAKING CHANGE:` in the commit body, or `!` in the commit header, creates a major release
 
-The workflow bootstraps the current version on its first run by creating `v0.1.0` from the initial commit if that tag does not already exist. If you want to do this manually before merging the release workflow, create the tag from the commit that contains `package.json` version `0.1.0`:
+The `v0.1.0` bootstrap tag must exist before the first automated release. Create it from the commit that contains `package.json` version `0.1.0`:
 
 ```bash
 git tag v0.1.0
@@ -96,7 +98,7 @@ git push origin v0.1.0
 
 After that, each squash-merged PR to `main` should use a Conventional Commit title, for example `feat: add SLNG trigger options` or `fix: normalize trigger arguments`.
 
-For npmjs.com, prefer [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/) with GitHub Actions OIDC. Configure npm with this repository and `.github/workflows/publish.yml`. If Trusted Publishing is not configured, set an `NPM_TOKEN` repository secret with publish access.
+For npmjs.com, prefer [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/) with GitHub Actions OIDC after the package exists on npm. For the first-ever publish, set an `NPM_TOKEN` repository secret with publish access or publish once manually with `npm publish`; then configure Trusted Publishing for this repository and `.github/workflows/publish.yml`.
 
 ### Bake into an n8n Docker image
 
@@ -178,6 +180,7 @@ Import them into n8n with **Workflows → Import from File**, then replace place
 ## Resources
 
 * [n8n community nodes documentation](https://docs.n8n.io/integrations/#community-nodes)
+* [n8n community node packages on npm](https://www.npmjs.com/search?q=keywords%3An8n-community-node-package)
 * [SLNG documentation](https://docs.slng.ai)
 
 ## Version history
