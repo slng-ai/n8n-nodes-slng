@@ -1,3 +1,9 @@
+## [0.3.0](https://github.com/slng-ai/n8n-nodes-slng/compare/v0.2.3...v0.3.0) (2026-09-10)
+
+### Features
+
+* **trigger:** migrate SLNG Trigger to the org-level Tools API ([6ed3db2](https://github.com/slng-ai/n8n-nodes-slng/commit/6ed3db2afb6a151e0bc2b598b73ebe9d0c2492f3))
+
 ## [0.2.3](https://github.com/slng-ai/n8n-nodes-slng/compare/v0.2.2...v0.2.3) (2026-09-10)
 
 ## [0.2.2](https://github.com/slng-ai/n8n-nodes-slng/compare/v0.2.1...v0.2.2) (2026-06-25)

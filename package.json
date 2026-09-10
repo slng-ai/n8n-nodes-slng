@@ -1,6 +1,6 @@
 {
     "name": "n8n-nodes-slng",
-    "version": "0.2.3",
+    "version": "0.3.0",
     "description": "n8n community node for SLNG: text-to-speech, speech-to-text, and a trigger that registers a webhook tool on a SLNG voice agent",
     "license": "MIT",
     "homepage": "",
