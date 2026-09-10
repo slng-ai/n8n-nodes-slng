@@ -50,7 +50,7 @@ function slngErrorDetail(error: unknown): string | undefined {
 /** Wrapper around the authenticated Agents API request. */
 async function agentRequest(
 	ctx: IHookFunctions | ILoadOptionsFunctions,
-	method: 'GET' | 'PATCH',
+	method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
 	path: string,
 	body?: IDataObject,
 ): Promise<IDataObject> {
@@ -71,15 +71,83 @@ async function agentRequest(
 }
 
 /**
- * Existing tools read via GET come back with a read-only `auth_type` (secrets are
- * write-only). To preserve them on a read-modify-write PATCH, convert `auth_type`
- * back into an `auth` object without a secret — the API keeps the existing secret
- * when the secret is omitted on update.
+ * Read-only fields returned by `GET /agents/{id}` that a full replace
+ * (`PUT /agents/{id}`) rejects with `extra_forbidden`. Attaching a tool is a
+ * read-modify-write of the whole agent, so we echo the GET body back minus these
+ * fields (a denylist — more robust than an allowlist, which risks silently
+ * dropping writable fields like `noise_cancellation_enabled` and resetting them).
  */
-function normalizeExistingTool(tool: IDataObject): IDataObject {
-	if (tool.type !== 'webhook' || !tool.auth_type) return tool;
-	const { auth_type, ...rest } = tool;
-	return { ...rest, auth: { type: auth_type } };
+const AGENT_READONLY_FIELDS = new Set([
+	'id',
+	'organisation_id',
+	'models_validation_error',
+	'livekit_deployment',
+	'template_variables',
+	'created_at',
+	'updated_at',
+	'deleted_at',
+]);
+
+/** Build a full PUT-replace body from a GET response, dropping read-only fields. */
+function pickAgentWriteBody(agent: IDataObject): IDataObject {
+	const body: IDataObject = {};
+	for (const [key, value] of Object.entries(agent)) {
+		if (!AGENT_READONLY_FIELDS.has(key)) body[key] = value;
+	}
+	return body;
+}
+
+/**
+ * Build a Vault secret name for a tool's shared secret. Vault names must be
+ * SCREAMING_SNAKE_CASE and unique per org, so we derive one from the tool name and
+ * append a random suffix. The `N8N_` prefix guarantees a leading letter.
+ */
+function makeSecretName(toolName: string): string {
+	const base =
+		(toolName || 'tool')
+			.toUpperCase()
+			.replace(/[^A-Z0-9]+/g, '_')
+			.replace(/^_+|_+$/g, '')
+			.slice(0, 40) || 'TOOL';
+	const suffix = randomBytes(4).toString('hex').toUpperCase();
+	return `N8N_${base}_${suffix}`;
+}
+
+/**
+ * Find an existing org tool by exact name. SLNG enforces unique live tool names, so
+ * on (re)activation we reuse a same-named tool (update + republish) instead of
+ * creating a duplicate — which would 409 ("a live tool named X already exists"), and
+ * which we cannot delete-then-recreate while it is still attached to an agent
+ * (`TOOL_DELETE_BLOCKED`). Returns the tool id, or undefined if none exists.
+ */
+async function findToolIdByName(
+	ctx: IHookFunctions,
+	name: string,
+): Promise<string | undefined> {
+	const res = (await agentRequest(ctx, 'GET', '/agents/tools')) as unknown;
+	const list = Array.isArray(res)
+		? (res as IDataObject[])
+		: ((res as IDataObject)?.items as IDataObject[]) ?? [];
+	const match = list.find((tool) => tool.name === name);
+	return match ? (match.id as string) : undefined;
+}
+
+/** Best-effort delete of an org tool; never throws (used during cleanup). */
+async function deleteToolQuietly(ctx: IHookFunctions, toolId: string): Promise<void> {
+	try {
+		await agentRequest(ctx, 'DELETE', `/agents/tools/${toolId}`);
+	} catch {
+		// ignore — cleanup is best-effort
+	}
+}
+
+/** Best-effort delete of a Vault secret; never throws (used during cleanup). */
+async function deleteSecretQuietly(ctx: IHookFunctions, name: string): Promise<void> {
+	try {
+		await agentRequest(ctx, 'DELETE', `/agents/secrets/${encodeURIComponent(name)}`);
+	} catch {
+		// ignore — cleanup is best-effort
+	}
 }
 
 /**
@@ -96,36 +164,40 @@ function normalizeWebhookBody(body: IDataObject): IDataObject {
 	return { ...rest, toolArguments };
 }
 
-/** Build the webhook tool object from the node parameters. */
-function buildTool(ctx: IHookFunctions, webhookUrl: string, secret: string): IDataObject {
-	const toolType = ctx.getNodeParameter('toolType', 'contextual') as string;
-	const authentication = ctx.getNodeParameter('authentication', 'none') as string;
-	const httpMethod = ctx.getNodeParameter('httpMethod', 'POST') as string;
-	const options = ctx.getNodeParameter('options', {}) as IDataObject;
+/**
+ * Everything parsed from the node parameters needed to create the org-level tool
+ * and its agent attachment. Collected once so the create body and the attachment
+ * body stay consistent.
+ */
+interface ToolSpec {
+	name: string;
+	description: string;
+	toolType: 'contextual' | 'system';
+	authentication: 'none' | 'bearer' | 'hmac';
+	httpMethod: string;
+	options: IDataObject;
+	/** JSON-schema for the tool's arguments (config.parameters). */
+	parameters: IDataObject;
+	/** LLM-facing hint for how to use the tool result (contextual only). */
+	responseInstructions?: string;
+	/** Spoken filler while the tool runs (contextual only). */
+	preActionMessage?: string;
+	/** Attachment-level system config { triggers, arguments } (system only). */
+	systemConfig?: IDataObject;
+}
 
-	const tool: IDataObject = {
-		type: 'webhook',
-		id: randomUUID(),
+/** Parse the node parameters into a ToolSpec. */
+function collectToolSpec(ctx: IHookFunctions): ToolSpec {
+	const toolType = ctx.getNodeParameter('toolType', 'contextual') as 'contextual' | 'system';
+	const spec: ToolSpec = {
 		name: ctx.getNodeParameter('toolName', '') as string,
 		description: ctx.getNodeParameter('toolDescription', '') as string,
-		url: webhookUrl,
-		source: toolType,
-		http_method: httpMethod,
+		toolType,
+		authentication: ctx.getNodeParameter('authentication', 'none') as ToolSpec['authentication'],
+		httpMethod: ctx.getNodeParameter('httpMethod', 'POST') as string,
+		options: ctx.getNodeParameter('options', {}) as IDataObject,
+		parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
 	};
-
-	if (options.webhookFormat) tool.webhook_format = options.webhookFormat;
-	if (options.timeoutSeconds) tool.timeout_seconds = options.timeoutSeconds;
-	if (typeof options.waitForResponse === 'boolean')
-		tool.wait_for_response = options.waitForResponse;
-	if (typeof options.showResultsToLlm === 'boolean') {
-		tool.show_results_to_llm = options.showResultsToLlm;
-	}
-
-	if (authentication === 'bearer') {
-		tool.auth = { type: 'bearer', token: secret };
-	} else if (authentication === 'hmac') {
-		tool.auth = { type: 'hmac', secret };
-	}
 
 	if (toolType === 'system') {
 		const triggers = (
@@ -189,8 +261,8 @@ function buildTool(ctx: IHookFunctions, webhookUrl: string, secret: string): IDa
 			if (row.required) required.push(name);
 		}
 
-		tool.parameters = { type: 'object', properties, required, additionalProperties: false };
-		tool.system = { triggers, arguments: argumentsList };
+		spec.parameters = { type: 'object', properties, required, additionalProperties: false };
+		spec.systemConfig = { triggers, arguments: argumentsList };
 	} else {
 		// contextual (LLM-invoked)
 		const paramRows =
@@ -207,20 +279,115 @@ function buildTool(ctx: IHookFunctions, webhookUrl: string, secret: string): IDa
 			};
 			if (row.required) required.push(name);
 		}
-		tool.parameters = { type: 'object', properties, required, additionalProperties: false };
+		spec.parameters = { type: 'object', properties, required, additionalProperties: false };
 
 		const llmResultInstructions = ctx.getNodeParameter('llmResultInstructions', '') as string;
-		if (llmResultInstructions) tool.llm_result_instructions = llmResultInstructions;
+		if (llmResultInstructions) spec.responseInstructions = llmResultInstructions;
 
 		const preActionMessage = ctx.getNodeParameter('preActionMessage', '') as string;
-		if (preActionMessage) {
-			tool.execution_policy = {
-				pre_action_message: { enabled: true, text: preActionMessage },
-			};
-		}
+		if (preActionMessage) spec.preActionMessage = preActionMessage;
 	}
 
-	return tool;
+	return spec;
+}
+
+/**
+ * Build the `POST /agents/tools` body for an `api_request` (webhook) tool. Because
+ * we create a dedicated tool per workflow, its `config.url` is the n8n webhook URL
+ * directly (no per-attachment override needed). `auth` references a Vault secret by
+ * name — the actual secret value is stored in the Vault, never inlined here.
+ */
+function buildToolCreateBody(
+	spec: ToolSpec,
+	webhookUrl: string,
+	secretName: string | undefined,
+): IDataObject {
+	const config: IDataObject = {
+		type: 'api_request',
+		url: webhookUrl,
+		http_method: spec.httpMethod,
+		parameters: spec.parameters,
+	};
+
+	if (spec.authentication === 'none' || !secretName) {
+		config.auth = { type: 'none' };
+	} else {
+		config.auth = { type: spec.authentication, secret_name: secretName };
+	}
+
+	if (spec.options.webhookFormat) config.webhook_format = spec.options.webhookFormat;
+	if (spec.options.timeoutSeconds) config.timeout_seconds = spec.options.timeoutSeconds;
+	if (typeof spec.options.waitForResponse === 'boolean') {
+		config.wait_for_response = spec.options.waitForResponse;
+	}
+
+	const response: IDataObject = {};
+	if (typeof spec.options.showResultsToLlm === 'boolean') {
+		response.show_to_llm = spec.options.showResultsToLlm;
+	}
+	if (spec.responseInstructions) response.instructions = spec.responseInstructions;
+	if (Object.keys(response).length > 0) config.response = response;
+
+	return {
+		name: spec.name,
+		description: spec.description,
+		tool_type: 'api_request',
+		config,
+	};
+}
+
+/**
+ * Build a `tool_ref` attachment linking a published tool version to the agent.
+ * Contextual tools attach with `invocation: 'model'`; system tools attach with
+ * `invocation: 'system'` plus their `system` config (triggers + argument sources).
+ */
+function buildAttachment(spec: ToolSpec, toolId: string, version: number): IDataObject {
+	const attachment: IDataObject = {
+		attachment_id: randomUUID(),
+		tool_id: toolId,
+		version,
+		invocation: spec.toolType === 'system' ? 'system' : 'model',
+	};
+
+	if (spec.systemConfig) attachment.system = spec.systemConfig;
+	if (spec.preActionMessage) {
+		attachment.execution_policy = {
+			pre_action_message: { enabled: true, text: spec.preActionMessage },
+		};
+	}
+
+	return attachment;
+}
+
+/**
+ * Build a placeholder sample input for the publish green-run from the tool's
+ * parameter JSON-schema. Every declared property gets a type-appropriate stub so
+ * the required-field validation passes.
+ */
+function buildSampleInput(parameters: IDataObject): IDataObject {
+	const properties = (parameters.properties as IDataObject) ?? {};
+	const sample: IDataObject = {};
+	for (const [name, schema] of Object.entries(properties)) {
+		const type = ((schema as IDataObject)?.type as string) ?? 'string';
+		switch (type) {
+			case 'boolean':
+				sample[name] = true;
+				break;
+			case 'integer':
+			case 'number':
+				sample[name] = 0;
+				break;
+			case 'array':
+				sample[name] = [];
+				break;
+			case 'object':
+				sample[name] = {};
+				break;
+			default:
+				sample[name] = 'sample';
+		}
+	}
+	return sample;
 }
 
 export class SlngTrigger implements INodeType {
@@ -773,16 +940,18 @@ export class SlngTrigger implements INodeType {
 		default: {
 			async checkExists(this: IHookFunctions): Promise<boolean> {
 				const staticData = this.getWorkflowStaticData('node');
+				const attachmentId = staticData.attachmentId as string | undefined;
 				const toolId = staticData.toolId as string | undefined;
-				if (!toolId) return false;
+				if (!attachmentId && !toolId) return false;
 
 				const agentId = this.getNodeParameter('agentId', '', { extractValue: true }) as string;
-				const webhookUrl = this.getNodeWebhookUrl('default');
 
 				try {
 					const agent = await agentRequest(this, 'GET', `/agents/${agentId}`);
-					const tools = Array.isArray(agent.tools) ? (agent.tools as IDataObject[]) : [];
-					return tools.some((tool) => tool.id === toolId || tool.url === webhookUrl);
+					const refs = Array.isArray(agent.tool_refs) ? (agent.tool_refs as IDataObject[]) : [];
+					return refs.some(
+						(ref) => ref.attachment_id === attachmentId || ref.tool_id === toolId,
+					);
 				} catch {
 					return false;
 				}
@@ -795,41 +964,109 @@ export class SlngTrigger implements INodeType {
 				}
 
 				const agentId = this.getNodeParameter('agentId', '', { extractValue: true }) as string;
-				const authentication = this.getNodeParameter('authentication', 'none') as string;
 				const staticData = this.getWorkflowStaticData('node');
+				const spec = collectToolSpec(this);
 
+				// Keep the existing secret UX: use the configured secret, else the stored one,
+				// else auto-generate. Store it in the Vault and reference it by name from the
+				// tool's auth; keep the plaintext locally so webhook() can verify signatures.
 				let secret = '';
-				if (authentication !== 'none') {
+				let secretName: string | undefined;
+				const priorSecretName = staticData.secretName as string | undefined;
+				if (spec.authentication !== 'none') {
 					secret =
 						(this.getNodeParameter('secret', '') as string) ||
 						(staticData.secret as string) ||
 						randomBytes(32).toString('hex');
+					secretName = makeSecretName(spec.name);
+					await agentRequest(this, 'POST', '/agents/secrets', {
+						name: secretName,
+						value: secret,
+						description: `SLNG Trigger (n8n) secret for tool "${spec.name}"`,
+					});
+				}
+				// Drop the previous activation's secret once a new one is in place.
+				if (priorSecretName && priorSecretName !== secretName) {
+					await deleteSecretQuietly(this, priorSecretName);
 				}
 
-				const tool = buildTool(this, webhookUrl, secret);
-
-				const agent = await agentRequest(this, 'GET', `/agents/${agentId}`);
-				const existing = Array.isArray(agent.tools) ? (agent.tools as IDataObject[]) : [];
+				const toolBody = buildToolCreateBody(spec, webhookUrl, secretName);
 				const priorToolId = staticData.toolId as string | undefined;
 
-				// Drop any tool that is "ours" so re-registering replaces it instead of
-				// appending a duplicate. SLNG enforces unique tool names, so a leftover tool
-				// from a previous activation/test (same name, same URL, or our stored id)
-				// must be removed first — otherwise the agent rejects the update.
-				const tools = existing
-					.filter((existingTool) => {
-						if (priorToolId && existingTool.id === priorToolId) return false;
-						if (existingTool.name === tool.name) return false;
-						if (existingTool.url === webhookUrl) return false;
-						return true;
-					})
-					.map(normalizeExistingTool);
-				tools.push(tool);
+				// Resolve the tool by its CURRENT name (authoritative). Reusing a same-named
+				// tool makes re-activation idempotent and self-heals orphans from test runs;
+				// resolving by name (not the stored id) makes a rename take effect — the old
+				// tool is detached and deleted below. We never delete-then-recreate the same
+				// tool here: an attached tool can't be deleted and a duplicate name is rejected.
+				let toolId = await findToolIdByName(this, spec.name);
+				if (toolId) {
+					await agentRequest(this, 'PATCH', `/agents/tools/${toolId}`, {
+						description: toolBody.description,
+						config: toolBody.config,
+					});
+				} else {
+					const created = await agentRequest(this, 'POST', '/agents/tools', toolBody);
+					toolId = created.id as string;
+				}
 
-				await agentRequest(this, 'PATCH', `/agents/${agentId}`, { tools });
+				// Publishing an api_request tool requires the `green_run` gate to pass, which
+				// means a successful test run first. NOTE: the run makes a real HTTP call to
+				// the tool URL (the n8n webhook), so activation fires the webhook once with
+				// sample input — the workflow will execute a single time on activation.
+				await agentRequest(this, 'POST', `/agents/tools/${toolId}/run`, {
+					sample_input: buildSampleInput(spec.parameters),
+					confirm_side_effects: true,
+				});
 
-				staticData.toolId = tool.id as string;
+				const published = await agentRequest(this, 'POST', `/agents/tools/${toolId}/publish`, {});
+				const version = (published.version_number ?? published.version) as number;
+
+				// Attach the published version to the agent via a full replace, round-tripping
+				// the agent's other config and tool/MCP attachments so nothing is wiped.
+				const agent = await agentRequest(this, 'GET', `/agents/${agentId}`);
+
+				// Only `shared`-mode agents accept tool attachments; legacy agents reject them
+				// ("legacy agents cannot contain shared tool or MCP attachments") with no
+				// documented way to switch modes. Fail early with a clear message.
+				if (agent.tool_mode && agent.tool_mode !== 'shared') {
+					throw new NodeOperationError(
+						this.getNode(),
+						`Agent "${(agent.name as string) || agentId}" is in "${agent.tool_mode as string}" tool mode and cannot accept tools. Use an agent in "shared" tool mode.`,
+					);
+				}
+
+				const existingRefs = Array.isArray(agent.tool_refs)
+					? (agent.tool_refs as IDataObject[])
+					: [];
+				const priorAttachmentId = staticData.attachmentId as string | undefined;
+				// Drop our previous attachment, any existing attachment of this same tool (an
+				// older pinned version), and any attachment of the prior (e.g. renamed) tool so
+				// re-activation replaces rather than stacks.
+				const toolRefs = existingRefs.filter(
+					(ref) =>
+						ref.attachment_id !== priorAttachmentId &&
+						ref.tool_id !== toolId &&
+						ref.tool_id !== priorToolId,
+				);
+				const attachment = buildAttachment(spec, toolId, version);
+				toolRefs.push(attachment);
+
+				await agentRequest(this, 'PUT', `/agents/${agentId}`, {
+					...pickAgentWriteBody(agent),
+					tool_refs: toolRefs,
+				});
+
+				// If the tool was renamed, the old tool is now detached — delete it so it does
+				// not linger as an orphan.
+				if (priorToolId && priorToolId !== toolId) {
+					await deleteToolQuietly(this, priorToolId);
+				}
+
+				staticData.toolId = toolId;
+				staticData.version = version;
+				staticData.attachmentId = attachment.attachment_id as string;
 				staticData.agentId = agentId;
+				if (secretName) staticData.secretName = secretName;
 				if (secret) staticData.secret = secret;
 
 				return true;
@@ -838,24 +1075,40 @@ export class SlngTrigger implements INodeType {
 			async delete(this: IHookFunctions): Promise<boolean> {
 				const staticData = this.getWorkflowStaticData('node');
 				const toolId = staticData.toolId as string | undefined;
+				const attachmentId = staticData.attachmentId as string | undefined;
+				const secretName = staticData.secretName as string | undefined;
 				const agentId =
 					(staticData.agentId as string) ||
 					(this.getNodeParameter('agentId', '', { extractValue: true }) as string);
 
-				if (toolId && agentId) {
+				// Detach from the agent (full replace without our attachment), then remove the
+				// org tool and its Vault secret. All best-effort: never block deactivation.
+				if (attachmentId && agentId) {
 					try {
 						const agent = await agentRequest(this, 'GET', `/agents/${agentId}`);
-						const existing = Array.isArray(agent.tools) ? (agent.tools as IDataObject[]) : [];
-						const tools = existing.filter((tool) => tool.id !== toolId).map(normalizeExistingTool);
-						await agentRequest(this, 'PATCH', `/agents/${agentId}`, { tools });
+						const existingRefs = Array.isArray(agent.tool_refs)
+							? (agent.tool_refs as IDataObject[])
+							: [];
+						const toolRefs = existingRefs.filter(
+							(ref) => ref.attachment_id !== attachmentId && ref.tool_id !== toolId,
+						);
+						await agentRequest(this, 'PUT', `/agents/${agentId}`, {
+							...pickAgentWriteBody(agent),
+							tool_refs: toolRefs,
+						});
 					} catch {
-						// Best-effort cleanup: never block deactivation if the agent is gone or
-						// unreachable. A leftover tool is replaced by create()'s idempotent dedup.
+						// Best-effort: never block deactivation if the agent is gone or unreachable.
 					}
 				}
 
+				if (toolId) await deleteToolQuietly(this, toolId);
+				if (secretName) await deleteSecretQuietly(this, secretName);
+
 				delete staticData.toolId;
+				delete staticData.version;
+				delete staticData.attachmentId;
 				delete staticData.agentId;
+				delete staticData.secretName;
 				delete staticData.secret;
 
 				return true;
