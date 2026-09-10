@@ -1,4 +1,10 @@
-# n8n-nodes-slng
+<p align="center">
+  <a href="https://slng.ai">
+    <img src="https://www.datocms-assets.com/182222/1763142213-logo-lg.svg" alt="slng.ai" height="64" />
+  </a>
+</p>
+
+<h1 align="center">n8n-nodes-slng</h1>
 
 This is an n8n community node. It lets you use [SLNG](https://slng.ai) in your n8n workflows.
 
@@ -7,7 +13,6 @@ SLNG is a unified voice AI platform offering text-to-speech, speech-to-text, and
 [n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/sustainable-use-license/) workflow automation platform.
 
 [Installation](#installation)
-[Packaging and internal release](#packaging-and-internal-release)
 [Operations](#operations)
 [Credentials](#credentials)
 [Compatibility](#compatibility)
@@ -18,113 +23,17 @@ SLNG is a unified voice AI platform offering text-to-speech, speech-to-text, and
 
 ## Installation
 
-Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) in the n8n community nodes documentation.
+In your n8n instance, go to **Settings → Community Nodes → Install**, enter the package name `n8n-nodes-slng`, and confirm. See the [installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) for details.
 
-You can also browse n8n community node packages on npm using the [`n8n-community-node-package` keyword search](https://www.npmjs.com/search?q=keywords%3An8n-community-node-package).
-
-## Packaging and internal release
-
-This package can be distributed internally as a normal n8n community node. Private or unverified community nodes require a self-hosted n8n instance.
-
-### Create a release artifact
-
-From the repository root:
-
-```bash
-npm install
-npm run lint
-npm run build
-npm pack
-```
-
-`npm pack` creates a tarball such as `n8n-nodes-slng-0.1.0.tgz`. The package only ships the `dist/` folder, as configured by the `files` entry in `package.json`.
-
-### Install from a tarball
-
-Use this for a quick internal test or for Docker images that copy the package artifact directly:
+For a self-hosted instance you can also install it manually:
 
 ```bash
 mkdir -p ~/.n8n/nodes
 cd ~/.n8n/nodes
-npm install /path/to/n8n-nodes-slng-0.1.0.tgz
+npm install n8n-nodes-slng
 ```
 
-Restart n8n after installing or upgrading the package.
-
-### Publish to a private registry
-
-Use this for repeatable internal distribution through GitHub Packages, npm private packages, Verdaccio, Artifactory, or another private npm registry.
-
-```bash
-npm version patch
-npm run lint
-npm run build
-npm publish --registry <private-registry-url>
-```
-
-If you change the package version, update `CHANGELOG.md` in the same change. Consumers can then install the versioned package:
-
-```bash
-mkdir -p ~/.n8n/nodes
-cd ~/.n8n/nodes
-npm install n8n-nodes-slng@0.1.0 --registry <private-registry-url>
-```
-
-### Automated release from main
-
-This repository publishes automatically when changes land on `main`.
-
-The release workflow:
-
-1. Installs dependencies with `npm ci`
-2. Builds and lints the node package
-3. Uses Conventional Commit messages to choose the next version
-4. Updates `CHANGELOG.md`, `package.json`, and `package-lock.json`
-5. Publishes the package to npmjs.com
-6. Creates a GitHub Release with the generated `.tgz` tarball attached
-
-Versioning follows the same style as `gateway-specs`:
-
-- `feat:` creates a minor release
-- `fix:`, `perf:`, `refactor:`, `docs:`, `chore:`, `ci:`, `test:`, `style:`, and `build:` create patch releases
-- `BREAKING CHANGE:` in the commit body, or `!` in the commit header, creates a major release
-
-The `v0.1.0` bootstrap tag must exist before the first automated release. Create it from the commit that contains `package.json` version `0.1.0`:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-After that, each squash-merged PR to `main` should use a Conventional Commit title, for example `feat: add SLNG trigger options` or `fix: normalize trigger arguments`.
-
-For npmjs.com, prefer [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/) with GitHub Actions OIDC after the package exists on npm. For the first-ever publish, set an `NPM_TOKEN` repository secret with publish access or publish once manually with `npm publish`; then configure Trusted Publishing for this repository and `.github/workflows/publish.yml`.
-
-### Bake into an n8n Docker image
-
-For production, prefer a custom n8n image with the package installed at build time:
-
-```dockerfile
-FROM n8nio/n8n:latest
-
-USER root
-
-COPY n8n-nodes-slng-0.1.0.tgz /tmp/
-RUN mkdir -p /home/node/.n8n/nodes \
-	&& cd /home/node/.n8n/nodes \
-	&& npm install /tmp/n8n-nodes-slng-0.1.0.tgz \
-	&& rm /tmp/n8n-nodes-slng-0.1.0.tgz
-
-USER node
-```
-
-Build and deploy the image:
-
-```bash
-docker build -t slng/n8n:with-slng-nodes .
-```
-
-When releasing an update, bump the package version, build a new tarball or publish to the private registry, rebuild the n8n image, and redeploy. Existing workflows keep using the same node type names (`slng` and `slngTrigger`), so updates should be backward-compatible unless the node schema changes.
+Restart n8n after installing or upgrading.
 
 ## Operations
 
@@ -185,6 +94,8 @@ Import them into n8n with **Workflows → Import from File**, then replace place
 
 ## Version history
 
-### 0.1.0
+See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
-Initial release: SLNG API credential, SLNG node (TTS/STT), and SLNG Trigger node.
+## Contributing
+
+Development and release instructions live in [CONTRIBUTING.md](CONTRIBUTING.md).
