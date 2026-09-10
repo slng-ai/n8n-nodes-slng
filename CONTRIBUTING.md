@@ -37,14 +37,21 @@ example `feat: add SLNG trigger options` or `fix: normalize trigger arguments`.
 ### npm authentication
 
 Publishing uses [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/)
-with GitHub Actions OIDC (`provenance: true`), configured for this repository
-and `.github/workflows/publish.yml`. No `NPM_TOKEN` is required for normal
-releases.
+with GitHub Actions OIDC (`provenance: true`). No `NPM_TOKEN` is required, and it
+works even though the npm account enforces 2FA (OIDC bypasses the interactive OTP
+that blocks token-based publishing from CI).
+
+The trusted publisher is configured on npmjs.com against:
+
+- **Organization:** `slng-ai`
+- **Repository:** `n8n-nodes-slng`
+- **Workflow filename:** `publish.yml` (must live in `.github/workflows/`), with
+  `id-token: write` permission (already set) and direct publish enabled.
 
 > **Note:** Trusted Publishing / OIDC cannot create a package that does not yet
-> exist on npm. The first-ever publish of the package was done manually with
-> `npm publish --access public --no-provenance`. This only matters if the
-> package is ever unpublished and needs to be recreated.
+> exist on npm. The first-ever publish was done manually with
+> `npm publish --access public --no-provenance`; this only matters if the package
+> is ever unpublished and needs recreating.
 
 ## Installing from a tarball (internal testing)
 
