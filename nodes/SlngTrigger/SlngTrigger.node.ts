@@ -500,7 +500,7 @@ export class SlngTrigger implements INodeType {
 				default: [],
 				required: true,
 				description:
-					'The SLNG agents to attach this tool to. Only agents in "shared" tool mode are listed; the same tool (this workflow\'s webhook) is attached to every agent you select. Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+					'The SLNG agents to attach this tool to (this workflow\'s webhook is attached to every agent you select). Agents marked "(legacy, unsupported)" cannot hold tools and will error on activation. Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 			},
 			{
 				displayName: 'Tool Name',
@@ -983,14 +983,22 @@ export class SlngTrigger implements INodeType {
 					json: true,
 				})) as IDataObject[];
 
-				// Only `shared`-mode agents can hold tool attachments; hide the rest so the
-				// user cannot pick an agent that would fail on activation.
+				const isShared = (agent: IDataObject) =>
+					!agent.tool_mode || agent.tool_mode === 'shared';
+
+				// List every agent so users can see them all, with shared (usable) agents first.
+				// Legacy agents are labelled: they cannot hold tool attachments under the new
+				// API, and activation rejects them with a clear error.
 				return (Array.isArray(agents) ? agents : [])
-					.filter((agent) => !agent.tool_mode || agent.tool_mode === 'shared')
-					.map((agent) => ({
-						name: (agent.name as string) || (agent.id as string),
-						value: agent.id as string,
-					}));
+					.slice()
+					.sort((a, b) => Number(isShared(b)) - Number(isShared(a)))
+					.map((agent) => {
+						const label = (agent.name as string) || (agent.id as string);
+						return {
+							name: isShared(agent) ? label : `${label} (legacy, unsupported)`,
+							value: agent.id as string,
+						};
+					});
 			},
 		},
 	};

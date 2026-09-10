@@ -53,7 +53,7 @@ Registers a webhook tool on one or more SLNG agents when the workflow is activat
 
 On activation the node creates an org-level SLNG tool, publishes it, and attaches the published version to every agent you select in the **Agents** field. Two things to know:
 
-- **Agents must be in `shared` tool mode.** Only shared-mode agents are listed in the picker; legacy-mode agents cannot accept shared tool attachments.
+- **Agents must be in `shared` tool mode.** The picker lists all your agents; legacy-mode agents are marked "(legacy, unsupported)" and will error on activation, since they cannot hold shared tool attachments.
 - **Activation runs the workflow once with sample data.** Publishing an API-request tool requires SLNG's publish "green run", which sends one test call to the webhook URL. Your workflow therefore executes a single time with placeholder arguments when you activate it.
 
 - **Tool type** — *LLM tool (contextual)*: the agent decides when to call it; you define the parameters it sends with a simple field builder (name, type, description, required). *System tool*: fires automatically on a call lifecycle event (call start, first user message, call end, tool succeeded/failed) with worker-populated arguments.
