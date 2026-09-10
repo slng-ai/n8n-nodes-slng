@@ -3,7 +3,7 @@ import type {
 	IDataObject,
 	IHookFunctions,
 	ILoadOptionsFunctions,
-	INodeListSearchResult,
+	INodePropertyOptions,
 	INodeType,
 	INodeTypeDescription,
 	IWebhookFunctions,
@@ -390,6 +390,75 @@ function buildSampleInput(parameters: IDataObject): IDataObject {
 	return sample;
 }
 
+/**
+ * Attach (or replace) our published tool on one agent via a full-agent PUT,
+ * round-tripping the agent's other config and attachments. Throws on non-shared
+ * agents. Returns the new attachment id.
+ */
+async function attachToolToAgent(
+	ctx: IHookFunctions,
+	agentId: string,
+	spec: ToolSpec,
+	toolId: string,
+	version: number,
+	priorAttachmentId: string | undefined,
+	priorToolId: string | undefined,
+): Promise<string> {
+	const agent = await agentRequest(ctx, 'GET', `/agents/${agentId}`);
+
+	// Only `shared`-mode agents accept tool attachments; legacy agents reject them
+	// ("legacy agents cannot contain shared tool or MCP attachments") with no
+	// documented way to switch modes. Fail with a clear message.
+	if (agent.tool_mode && agent.tool_mode !== 'shared') {
+		throw new NodeOperationError(
+			ctx.getNode(),
+			`Agent "${(agent.name as string) || agentId}" is in "${agent.tool_mode as string}" tool mode and cannot accept tools. Use an agent in "shared" tool mode.`,
+		);
+	}
+
+	const existingRefs = Array.isArray(agent.tool_refs) ? (agent.tool_refs as IDataObject[]) : [];
+	// Drop our previous attachment, any existing attachment of this same tool (an
+	// older pinned version), and any attachment of the prior (renamed) tool so
+	// re-activation replaces rather than stacks.
+	const toolRefs = existingRefs.filter(
+		(ref) =>
+			ref.attachment_id !== priorAttachmentId &&
+			ref.tool_id !== toolId &&
+			ref.tool_id !== priorToolId,
+	);
+	const attachment = buildAttachment(spec, toolId, version);
+	toolRefs.push(attachment);
+
+	await agentRequest(ctx, 'PUT', `/agents/${agentId}`, {
+		...pickAgentWriteBody(agent),
+		tool_refs: toolRefs,
+	});
+
+	return attachment.attachment_id as string;
+}
+
+/** Detach our tool from one agent via a full-agent PUT. Best-effort; never throws. */
+async function detachToolFromAgent(
+	ctx: IHookFunctions,
+	agentId: string,
+	attachmentId: string,
+	toolId: string | undefined,
+): Promise<void> {
+	try {
+		const agent = await agentRequest(ctx, 'GET', `/agents/${agentId}`);
+		const existingRefs = Array.isArray(agent.tool_refs) ? (agent.tool_refs as IDataObject[]) : [];
+		const toolRefs = existingRefs.filter(
+			(ref) => ref.attachment_id !== attachmentId && ref.tool_id !== toolId,
+		);
+		await agentRequest(ctx, 'PUT', `/agents/${agentId}`, {
+			...pickAgentWriteBody(agent),
+			tool_refs: toolRefs,
+		});
+	} catch {
+		// Best-effort: never block deactivation if the agent is gone or unreachable.
+	}
+}
+
 export class SlngTrigger implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'SLNG Trigger',
@@ -421,29 +490,17 @@ export class SlngTrigger implements INodeType {
 		],
 		properties: [
 			{
-				displayName: 'Agent',
-				name: 'agentId',
-				type: 'resourceLocator',
-				default: { mode: 'list', value: '' },
+				// eslint-disable-next-line n8n-nodes-base/node-param-display-name-wrong-for-dynamic-multi-options
+				displayName: 'Agents',
+				name: 'agentIds',
+				type: 'multiOptions',
+				typeOptions: {
+					loadOptionsMethod: 'getAgents',
+				},
+				default: [],
 				required: true,
-				description: 'The existing SLNG agent to attach this tool to',
-				modes: [
-					{
-						displayName: 'From List',
-						name: 'list',
-						type: 'list',
-						typeOptions: {
-							searchListMethod: 'searchAgents',
-							searchable: true,
-						},
-					},
-					{
-						displayName: 'By ID',
-						name: 'id',
-						type: 'string',
-						placeholder: 'e.g. 550e8400-e29b-41d4-a716-446655440000',
-					},
-				],
+				description:
+					'The SLNG agents to attach this tool to (this workflow\'s webhook is attached to every agent you select). Agents marked "(legacy, unsupported)" cannot hold tools and will error on activation. Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 			},
 			{
 				displayName: 'Tool Name',
@@ -918,20 +975,30 @@ export class SlngTrigger implements INodeType {
 	};
 
 	methods = {
-		listSearch: {
-			async searchAgents(this: ILoadOptionsFunctions): Promise<INodeListSearchResult> {
+		loadOptions: {
+			async getAgents(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const agents = (await this.helpers.httpRequestWithAuthentication.call(this, 'slngApi', {
 					method: 'GET',
 					url: `${AGENTS_API_BASE}/agents`,
 					json: true,
 				})) as IDataObject[];
 
-				const results = (Array.isArray(agents) ? agents : []).map((agent) => ({
-					name: (agent.name as string) || (agent.id as string),
-					value: agent.id as string,
-				}));
+				const isShared = (agent: IDataObject) =>
+					!agent.tool_mode || agent.tool_mode === 'shared';
 
-				return { results };
+				// List every agent so users can see them all, with shared (usable) agents first.
+				// Legacy agents are labelled: they cannot hold tool attachments under the new
+				// API, and activation rejects them with a clear error.
+				return (Array.isArray(agents) ? agents : [])
+					.slice()
+					.sort((a, b) => Number(isShared(b)) - Number(isShared(a)))
+					.map((agent) => {
+						const label = (agent.name as string) || (agent.id as string);
+						return {
+							name: isShared(agent) ? label : `${label} (legacy, unsupported)`,
+							value: agent.id as string,
+						};
+					});
 			},
 		},
 	};
@@ -940,18 +1007,29 @@ export class SlngTrigger implements INodeType {
 		default: {
 			async checkExists(this: IHookFunctions): Promise<boolean> {
 				const staticData = this.getWorkflowStaticData('node');
-				const attachmentId = staticData.attachmentId as string | undefined;
 				const toolId = staticData.toolId as string | undefined;
-				if (!attachmentId && !toolId) return false;
+				const attachments = (staticData.attachments as Record<string, string>) ?? {};
+				const agentIds = this.getNodeParameter('agentIds', []) as string[];
+				if (agentIds.length === 0 || !toolId) return false;
 
-				const agentId = this.getNodeParameter('agentId', '', { extractValue: true }) as string;
+				// Force a re-register if the selected agent set changed since last activation.
+				const stored = Object.keys(attachments);
+				if (stored.length !== agentIds.length || !agentIds.every((id) => stored.includes(id))) {
+					return false;
+				}
 
 				try {
-					const agent = await agentRequest(this, 'GET', `/agents/${agentId}`);
-					const refs = Array.isArray(agent.tool_refs) ? (agent.tool_refs as IDataObject[]) : [];
-					return refs.some(
-						(ref) => ref.attachment_id === attachmentId || ref.tool_id === toolId,
-					);
+					for (const agentId of agentIds) {
+						const agent = await agentRequest(this, 'GET', `/agents/${agentId}`);
+						const refs = Array.isArray(agent.tool_refs)
+							? (agent.tool_refs as IDataObject[])
+							: [];
+						const present = refs.some(
+							(ref) => ref.attachment_id === attachments[agentId] || ref.tool_id === toolId,
+						);
+						if (!present) return false;
+					}
+					return true;
 				} catch {
 					return false;
 				}
@@ -963,7 +1041,10 @@ export class SlngTrigger implements INodeType {
 					throw new NodeOperationError(this.getNode(), 'Could not resolve the webhook URL');
 				}
 
-				const agentId = this.getNodeParameter('agentId', '', { extractValue: true }) as string;
+				const agentIds = this.getNodeParameter('agentIds', []) as string[];
+				if (agentIds.length === 0) {
+					throw new NodeOperationError(this.getNode(), 'Select at least one agent');
+				}
 				const staticData = this.getWorkflowStaticData('node');
 				const spec = collectToolSpec(this);
 
@@ -1021,53 +1102,46 @@ export class SlngTrigger implements INodeType {
 				const published = await agentRequest(this, 'POST', `/agents/tools/${toolId}/publish`, {});
 				const version = (published.version_number ?? published.version) as number;
 
-				// Attach the published version to the agent via a full replace, round-tripping
-				// the agent's other config and tool/MCP attachments so nothing is wiped.
-				const agent = await agentRequest(this, 'GET', `/agents/${agentId}`);
-
-				// Only `shared`-mode agents accept tool attachments; legacy agents reject them
-				// ("legacy agents cannot contain shared tool or MCP attachments") with no
-				// documented way to switch modes. Fail early with a clear message.
-				if (agent.tool_mode && agent.tool_mode !== 'shared') {
-					throw new NodeOperationError(
-						this.getNode(),
-						`Agent "${(agent.name as string) || agentId}" is in "${agent.tool_mode as string}" tool mode and cannot accept tools. Use an agent in "shared" tool mode.`,
+				// Attach the published version to each selected agent. Attachments are tracked
+				// per agent (agentId -> attachment_id) and persisted incrementally, so a partial
+				// failure still leaves enough state for delete() to clean up.
+				const priorAttachments = (staticData.attachments as Record<string, string>) ?? {};
+				const newAttachments: Record<string, string> = {};
+				for (const agentId of agentIds) {
+					const attachmentId = await attachToolToAgent(
+						this,
+						agentId,
+						spec,
+						toolId,
+						version,
+						priorAttachments[agentId],
+						priorToolId,
 					);
+					newAttachments[agentId] = attachmentId;
+					staticData.attachments = newAttachments;
 				}
 
-				const existingRefs = Array.isArray(agent.tool_refs)
-					? (agent.tool_refs as IDataObject[])
-					: [];
-				const priorAttachmentId = staticData.attachmentId as string | undefined;
-				// Drop our previous attachment, any existing attachment of this same tool (an
-				// older pinned version), and any attachment of the prior (e.g. renamed) tool so
-				// re-activation replaces rather than stacks.
-				const toolRefs = existingRefs.filter(
-					(ref) =>
-						ref.attachment_id !== priorAttachmentId &&
-						ref.tool_id !== toolId &&
-						ref.tool_id !== priorToolId,
-				);
-				const attachment = buildAttachment(spec, toolId, version);
-				toolRefs.push(attachment);
+				// Detach from agents that were previously attached but are no longer selected.
+				for (const [agentId, attachmentId] of Object.entries(priorAttachments)) {
+					if (!agentIds.includes(agentId)) {
+						await detachToolFromAgent(this, agentId, attachmentId, priorToolId ?? toolId);
+					}
+				}
 
-				await agentRequest(this, 'PUT', `/agents/${agentId}`, {
-					...pickAgentWriteBody(agent),
-					tool_refs: toolRefs,
-				});
-
-				// If the tool was renamed, the old tool is now detached — delete it so it does
-				// not linger as an orphan.
+				// If the tool was renamed, the old tool is now detached everywhere — delete it
+				// so it does not linger as an orphan.
 				if (priorToolId && priorToolId !== toolId) {
 					await deleteToolQuietly(this, priorToolId);
 				}
 
 				staticData.toolId = toolId;
 				staticData.version = version;
-				staticData.attachmentId = attachment.attachment_id as string;
-				staticData.agentId = agentId;
+				staticData.attachments = newAttachments;
 				if (secretName) staticData.secretName = secretName;
 				if (secret) staticData.secret = secret;
+				// Clear legacy single-agent fields from earlier versions.
+				delete staticData.attachmentId;
+				delete staticData.agentId;
 
 				return true;
 			},
@@ -1075,30 +1149,19 @@ export class SlngTrigger implements INodeType {
 			async delete(this: IHookFunctions): Promise<boolean> {
 				const staticData = this.getWorkflowStaticData('node');
 				const toolId = staticData.toolId as string | undefined;
-				const attachmentId = staticData.attachmentId as string | undefined;
 				const secretName = staticData.secretName as string | undefined;
-				const agentId =
-					(staticData.agentId as string) ||
-					(this.getNodeParameter('agentId', '', { extractValue: true }) as string);
+				const attachments = { ...((staticData.attachments as Record<string, string>) ?? {}) };
+				// Back-compat: fold in a single-agent attachment stored by earlier versions.
+				const legacyAgentId = staticData.agentId as string | undefined;
+				const legacyAttachmentId = staticData.attachmentId as string | undefined;
+				if (legacyAgentId && legacyAttachmentId && !attachments[legacyAgentId]) {
+					attachments[legacyAgentId] = legacyAttachmentId;
+				}
 
-				// Detach from the agent (full replace without our attachment), then remove the
-				// org tool and its Vault secret. All best-effort: never block deactivation.
-				if (attachmentId && agentId) {
-					try {
-						const agent = await agentRequest(this, 'GET', `/agents/${agentId}`);
-						const existingRefs = Array.isArray(agent.tool_refs)
-							? (agent.tool_refs as IDataObject[])
-							: [];
-						const toolRefs = existingRefs.filter(
-							(ref) => ref.attachment_id !== attachmentId && ref.tool_id !== toolId,
-						);
-						await agentRequest(this, 'PUT', `/agents/${agentId}`, {
-							...pickAgentWriteBody(agent),
-							tool_refs: toolRefs,
-						});
-					} catch {
-						// Best-effort: never block deactivation if the agent is gone or unreachable.
-					}
+				// Detach from every agent, then remove the org tool and its Vault secret. All
+				// best-effort: never block deactivation.
+				for (const [agentId, attachmentId] of Object.entries(attachments)) {
+					await detachToolFromAgent(this, agentId, attachmentId, toolId);
 				}
 
 				if (toolId) await deleteToolQuietly(this, toolId);
@@ -1106,6 +1169,7 @@ export class SlngTrigger implements INodeType {
 
 				delete staticData.toolId;
 				delete staticData.version;
+				delete staticData.attachments;
 				delete staticData.attachmentId;
 				delete staticData.agentId;
 				delete staticData.secretName;
