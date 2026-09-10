@@ -49,11 +49,11 @@ The **Model** and (for TTS) **Voice** fields are dropdowns populated live from t
 
 ### SLNG Trigger
 
-Registers a webhook tool on an existing SLNG agent when the workflow is activated, and removes it on deactivation. When the agent calls the tool during a call, the workflow runs and (in `Using Last Node` mode) returns its output to the agent.
+Registers a webhook tool on one or more SLNG agents when the workflow is activated, and removes it on deactivation. When an agent calls the tool during a call, the workflow runs and (in `Using Last Node` mode) returns its output to the agent.
 
-On activation the node creates an org-level SLNG tool, publishes it, and attaches the published version to the agent. Two things to know:
+On activation the node creates an org-level SLNG tool, publishes it, and attaches the published version to every agent you select in the **Agents** field. Two things to know:
 
-- **The agent must be in `shared` tool mode.** Legacy-mode agents cannot accept shared tool attachments; activation fails with a clear error if you pick one.
+- **Agents must be in `shared` tool mode.** Only shared-mode agents are listed in the picker; legacy-mode agents cannot accept shared tool attachments.
 - **Activation runs the workflow once with sample data.** Publishing an API-request tool requires SLNG's publish "green run", which sends one test call to the webhook URL. Your workflow therefore executes a single time with placeholder arguments when you activate it.
 
 - **Tool type** — *LLM tool (contextual)*: the agent decides when to call it; you define the parameters it sends with a simple field builder (name, type, description, required). *System tool*: fires automatically on a call lifecycle event (call start, first user message, call end, tool succeeded/failed) with worker-populated arguments.
