@@ -1,3 +1,10 @@
+## [0.4.0](https://github.com/slng-ai/n8n-nodes-slng/compare/v0.3.0...v0.4.0) (2026-09-10)
+
+### Features
+
+* **CLI-234:** list all agents in the picker, label legacy ones ([439eed1](https://github.com/slng-ai/n8n-nodes-slng/commit/439eed154ed481acaf578e47f4fca174d657622a))
+* **trigger:** attach the tool to multiple agents ([dfb2e0d](https://github.com/slng-ai/n8n-nodes-slng/commit/dfb2e0db0b600e8a47aab5349b3b9c61c6cb07b2))
+
 ## [0.3.0](https://github.com/slng-ai/n8n-nodes-slng/compare/v0.2.3...v0.3.0) (2026-09-10)
 
 ### Features
