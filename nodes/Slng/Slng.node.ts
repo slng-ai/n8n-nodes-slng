@@ -15,6 +15,39 @@ const AGENTS_API_BASE = 'https://api.agents.slng.ai/v1';
 const VOICE_API_BASE = 'https://api.slng.ai/v1';
 
 /**
+ * SLNG serves models from regional gateway hosts (`<code>.api.slng.ai`), each hosting a
+ * specific set of models. Picking a region filters the model list and routes the
+ * TTS/STT call to that region's host. "Auto (nearest)" (empty value) uses the central
+ * host with automatic routing.
+ *
+ * Source of truth: `catalog/clusters.json` in the gateway-specs repo. There is no public
+ * API for this list today, so it is bundled here — re-sync it when clusters.json changes.
+ */
+const REGIONS: Array<{ code: string; host: string; label: string }> = [
+	{ code: 'eu-north', host: 'eu-north.api.slng.ai', label: 'European Union (North)' },
+	{ code: 'eu-west', host: 'eu-west.api.slng.ai', label: 'European Union (West)' },
+	{ code: 'us-central', host: 'us-central.api.slng.ai', label: 'United States (Central)' },
+	{ code: 'us-east', host: 'us-east.api.slng.ai', label: 'United States (East)' },
+	{ code: 'us-west', host: 'us-west.api.slng.ai', label: 'United States (West)' },
+	{ code: 'au', host: 'au.api.slng.ai', label: 'Australia' },
+	{ code: 'br', host: 'br.api.slng.ai', label: 'Brazil' },
+	{ code: 'gb', host: 'gb.api.slng.ai', label: 'United Kingdom' },
+	{ code: 'id', host: 'id.api.slng.ai', label: 'Indonesia' },
+	{ code: 'il', host: 'il.api.slng.ai', label: 'Israel' },
+	{ code: 'in', host: 'in.api.slng.ai', label: 'India' },
+	{ code: 'jp', host: 'jp.api.slng.ai', label: 'Japan' },
+	{ code: 'sg', host: 'sg.api.slng.ai', label: 'Singapore' },
+	{ code: 'za', host: 'za.api.slng.ai', label: 'South Africa' },
+];
+
+/** Base URL for TTS/STT inference: the selected region's host, else the central host. */
+function regionBaseUrl(region?: string): string {
+	if (!region) return VOICE_API_BASE;
+	const match = REGIONS.find((r) => r.code === region);
+	return match ? `https://${match.host}/v1` : VOICE_API_BASE;
+}
+
+/**
  * Pull the human-readable error out of a SLNG API error response. SLNG returns
  * `{ detail: "..." }` (or a FastAPI-style array of validation errors), which n8n
  * otherwise buries under a generic "Bad request" message.
@@ -87,6 +120,7 @@ function buildDispatchArguments(dispatchArguments: IDataObject): IDataObject {
 async function fetchCatalogModels(
 	ctx: ILoadOptionsFunctions,
 	serviceType: 'tts' | 'stt',
+	region?: string,
 ): Promise<IDataObject[]> {
 	const models: IDataObject[] = [];
 	let page = 1;
@@ -94,8 +128,14 @@ async function fetchCatalogModels(
 	do {
 		const response = (await ctx.helpers.httpRequestWithAuthentication.call(ctx, 'slngApi', {
 			method: 'GET',
+			// The catalog is served from the central host only; `region` filters the list.
 			url: `${VOICE_API_BASE}/catalog/models`,
-			qs: { service_type: serviceType, page, page_size: 100 },
+			qs: {
+				service_type: serviceType,
+				page,
+				page_size: 100,
+				...(region ? { region } : {}),
+			},
 			json: true,
 		})) as IDataObject;
 
@@ -116,7 +156,8 @@ async function listCatalogModels(
 	serviceType: 'tts' | 'stt',
 	filter?: string,
 ): Promise<INodeListSearchResult> {
-	const models = await fetchCatalogModels(ctx, serviceType);
+	const region = (ctx.getCurrentNodeParameter('region') as string) || undefined;
+	const models = await fetchCatalogModels(ctx, serviceType, region);
 	const results: Array<{ name: string; value: string }> = [];
 	for (const item of models) {
 		const value = item.code as string;
@@ -136,7 +177,8 @@ async function listModelVoices(
 	const model = ctx.getCurrentNodeParameter('ttsModel', { extractValue: true }) as string;
 	if (!model) return { results: [] };
 
-	const models = await fetchCatalogModels(ctx, 'tts');
+	const region = (ctx.getCurrentNodeParameter('region') as string) || undefined;
+	const models = await fetchCatalogModels(ctx, 'tts', region);
 	const selectedModel = models.find((item) => item.code === model);
 	const voices = (selectedModel?.voices as IDataObject[]) ?? [];
 	const results: Array<{ name: string; value: string }> = [];
@@ -311,6 +353,23 @@ export class Slng implements INodeType {
 				default: 'generate',
 			},
 			{
+				displayName: 'Region',
+				name: 'region',
+				type: 'options',
+				default: '',
+				description:
+					"Region whose gateway serves the request. Filters the model list to that region and routes the call to the region's host. Auto picks the nearest region.",
+				displayOptions: {
+					show: { resource: ['textToSpeech', 'speechToText'] },
+				},
+				options: [
+					{ name: 'Auto (Nearest)', value: '' },
+					...REGIONS.map((r) => ({ name: r.label, value: r.code })).sort((a, b) =>
+						a.name.localeCompare(b.name),
+					),
+				],
+			},
+			{
 				displayName: 'Text',
 				name: 'text',
 				type: 'string',
@@ -331,6 +390,9 @@ export class Slng implements INodeType {
 				description: 'The TTS model to use. Pick from the catalog or enter a model path by ID.',
 				hint:
 					'See the <a href="https://docs.slng.ai/models/tts" target="_blank">SLNG TTS models documentation</a> for the full model list.',
+				typeOptions: {
+					loadOptionsDependsOn: ['region'],
+				},
 				displayOptions: {
 					show: { resource: ['textToSpeech'], operation: ['generate'] },
 				},
@@ -464,6 +526,9 @@ export class Slng implements INodeType {
 				description: 'The STT model to use. Pick from the catalog or enter a model path by ID.',
 				hint:
 					'See the <a href="https://docs.slng.ai/models/stt" target="_blank">SLNG STT models documentation</a> for the full model list.',
+				typeOptions: {
+					loadOptionsDependsOn: ['region'],
+				},
 				displayOptions: {
 					show: { resource: ['speechToText'], operation: ['transcribe'] },
 				},
@@ -576,6 +641,7 @@ export class Slng implements INodeType {
 					const text = this.getNodeParameter('text', i) as string;
 					const model = this.getNodeParameter('ttsModel', i, '', { extractValue: true }) as string;
 					const voice = this.getNodeParameter('voice', i, '', { extractValue: true }) as string;
+					const region = this.getNodeParameter('region', i, '') as string;
 					const binaryPropertyName = this.getNodeParameter('binaryPropertyName', i) as string;
 					const options = this.getNodeParameter('ttsOptions', i, {}) as IDataObject;
 					const fileName = (options.fileName as string) || 'speech.wav';
@@ -586,7 +652,7 @@ export class Slng implements INodeType {
 
 					const requestOptions: IHttpRequestOptions = {
 						method: 'POST',
-						url: `${VOICE_API_BASE}/tts/${model}`,
+						url: `${regionBaseUrl(region)}/tts/${model}`,
 						body,
 						json: true,
 						encoding: 'arraybuffer',
@@ -615,6 +681,7 @@ export class Slng implements INodeType {
 				} else if (resource === 'speechToText' && operation === 'transcribe') {
 					const binaryPropertyName = this.getNodeParameter('binaryPropertyName', i) as string;
 					const model = this.getNodeParameter('sttModel', i, '', { extractValue: true }) as string;
+					const region = this.getNodeParameter('region', i, '') as string;
 
 					const binary = this.helpers.assertBinaryData(i, binaryPropertyName);
 					const buffer = await this.helpers.getBinaryDataBuffer(i, binaryPropertyName);
@@ -628,7 +695,7 @@ export class Slng implements INodeType {
 
 					const response = (await this.helpers.httpRequestWithAuthentication.call(this, 'slngApi', {
 						method: 'POST',
-						url: `${VOICE_API_BASE}/stt/${model}`,
+						url: `${regionBaseUrl(region)}/stt/${model}`,
 						body: formData,
 					})) as IDataObject;
 

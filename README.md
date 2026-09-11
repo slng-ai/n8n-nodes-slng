@@ -47,6 +47,8 @@ This package contains two nodes:
 
 The **Model** and (for TTS) **Voice** fields are dropdowns populated live from the SLNG catalog API (`GET /v1/catalog/models`); the voice list is filtered to the chosen TTS model. Switch any of them to **By ID** to hardcode a model path or voice ID.
 
+The **Region** field (Text to Speech and Speech to Text) scopes the request to a SLNG regional gateway. Pick a region to list only the models served there and route the call to that region's host (e.g. `eu-west.api.slng.ai`); leave it on **Auto (Nearest)** to use the central host with automatic routing.
+
 ### SLNG Trigger
 
 Registers a webhook tool on one or more SLNG agents when the workflow is activated, and removes it on deactivation. When an agent calls the tool during a call, the workflow runs and (in `Using Last Node` mode) returns its output to the agent.
